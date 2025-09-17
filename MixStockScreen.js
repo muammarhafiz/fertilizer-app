@@ -200,4 +200,225 @@ h1{margin:0 0 8px} h2{margin:16px 0 8px}
 table{border-collapse:collapse;width:100%;margin-top:8px}
 th,td{border:1px solid #ddd;padding:8px;text-align:left} th{background:#f7f7f7}
 </style></head><body>
-<h1>Work Order — Stock
+<h1>Work Order — Stock Mix (1:${injRatio})</h1>
+<table>
+  <tr><th style="width:160px">Batch ID</th><td>${batchId}</td></tr>
+  <tr><th>Stock volume</th><td><b>${volStock}</b> L</td></tr>
+  <tr><th>Injector ratio</th><td>1:<b>${injRatio}</b></td></tr>
+  <tr><th>EC (est.)</th><td><b>${fx2(ecEstimate)}</b> mS/cm (scale ${fx2(Number(ecScale)||1)})</td></tr>
+  ${num(ecTarget)?`<tr><th>EC target</th><td>${fx2(num(ecTarget))} mS/cm (Δ ${(num(ecTarget)-ecEstimate).toFixed(2)})</td></tr>`:""}
+  ${num(ecMeasured)?`<tr><th>EC measured</th><td>${fx2(num(ecMeasured))} mS/cm</td></tr>`:""}
+  ${notes?`<tr><th>Notes</th><td>${notes}</td></tr>`:""}
+</table>
+
+<h2>Ingredients (grams into stock tank)</h2>
+<table><thead><tr><th>#</th><th>Fertilizer</th><th>Grams</th><th>Cost (RM)</th></tr></thead><tbody>
+${rows.map((r,i)=>{const f=getFert(r.fertId); if(!f) return ""; const price=Number(f.price_per_bag)||0; const bagKg=Number(f.bag_size_kg)||0;
+const cost= (price>0 && bagKg>0) ? num(r.gramsTotal)*(price/(bagKg*1000)) : 0;
+return `<tr><td>${i+1}</td><td>${f?.name||""}</td><td>${num(r.gramsTotal)}</td><td>${fx2(cost)}</td></tr>`}).join("")}
+<tr><td colspan="3"><b>Total cost (RM)</b></td><td><b>${fx2(results.costRM)}</b></td></tr>
+</tbody></table>
+
+<h2>Totals at dripper (ppm)</h2>
+<table><thead><tr><th>Target</th><th>ppm</th><th>Target</th><th>ppm</th></tr></thead><tbody>
+<tr><td>N</td><td>${r0(results.ppm.N)}</td><td>P₂O₅</td><td>${r0(results.ppm.P2O5)}</td></tr>
+<tr><td>K₂O</td><td>${r0(results.ppm.K2O)}</td><td>Ca</td><td>${r0(results.ppm.Ca)}</td></tr>
+<tr><td>Mg (elemental)</td><td>${r0(results.ppm.Mg)}</td><td>S</td><td>${r0(results.ppm.S)}</td></tr>
+<tr><td>Fe</td><td>${fx2(results.ppm.Fe)}</td><td>Mn</td><td>${fx2(results.ppm.Mn)}</td></tr>
+<tr><td>Zn</td><td>${fx2(results.ppm.Zn)}</td><td>Cu</td><td>${fx2(results.ppm.Cu)}</td></tr>
+<tr><td>B</td><td>${fx2(results.ppm.B)}</td><td>Mo</td><td>${fx2(results.ppm.Mo)}</td></tr>
+</tbody></table>
+<script>window.print();</script></body></html>`;
+    const w = window.open("", "_blank");
+    w.document.write(html);
+    w.document.close();
+  };
+
+  // UI
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 24 }}>
+      <Text style={styles.title}>Stock Mix (Injector)</Text>
+
+      <View style={styles.card}>
+        <Text style={styles.section}>Job details</Text>
+        <View style={{ gap: 8, marginTop: 8 }}>
+          <L label="Batch ID" v={batchId} onChangeText={setBatchId} />
+          <L label="Notes" v={notes} onChangeText={setNotes} multiline numberOfLines={3} />
+        </View>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.label}>Stock volume (L)</Text>
+        <TextInput value={stockVolumeL} onChangeText={setStockVolumeL} keyboardType="decimal-pad" style={styles.input} />
+        <Text style={[styles.label, { marginTop: 10 }]}>Injector ratio (1:x)</Text>
+        <TextInput value={ratio} onChangeText={setRatio} keyboardType="decimal-pad" style={styles.input} />
+      </View>
+
+      <View style={styles.card}>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+          <Text style={styles.section}>Ingredients (grams into stock tank)</Text>
+          <Pressable onPress={addRow} style={styles.addBtn}>
+            <Ionicons name="add" size={18} color="#fff" /><Text style={styles.addText}>Add</Text>
+          </Pressable>
+        </View>
+
+        {rows.length === 0 && <Text style={{ color: "#666", marginTop: 8 }}>Tap <Text style={{ fontWeight: "700" }}>Add</Text> to insert a row.</Text>}
+
+        {rows.map((r, idx) => {
+          const f = getFert(r.fertId);
+          return (
+            <View key={r.key} style={styles.rowCard}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.smallLabel}>Fertilizer</Text>
+                <Pressable onPress={() => openPicker(idx)} style={[styles.input, { minHeight: 44, justifyContent: "center" }]}>
+                  <Text numberOfLines={2}>{f ? f.name : "Select a fertilizer…"}</Text>
+                </Pressable>
+              </View>
+              <View style={{ width: 10 }} />
+              <View style={{ width: 160 }}>
+                <Text style={styles.smallLabel}>Grams (total)</Text>
+                <TextInput
+                  value={r.gramsTotal}
+                  onChangeText={(t) => setRows((p) => p.map((row, i) => i === idx ? { ...row, gramsTotal: t } : row))}
+                  keyboardType="decimal-pad" placeholder="0" style={styles.input}
+                />
+              </View>
+              <Pressable onPress={() => removeRow(r.key)} style={styles.trashBtn}>
+                <Ionicons name="trash-outline" size={18} color="#c00" />
+              </Pressable>
+            </View>
+          );
+        })}
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.section}>Totals at dripper (ppm)</Text>
+        {loading ? <ActivityIndicator /> : (
+          <>
+            {/* Macros */}
+            <View style={styles.grid}>
+              <Box label="N" value={results.ppm.N} dp={0} />
+              <Box label="P₂O₅" value={results.ppm.P2O5} dp={0} />
+              <Box label="K₂O" value={results.ppm.K2O} dp={0} />
+              <Box label="Ca" value={results.ppm.Ca} dp={0} />
+              <Box label="Mg (elemental)" value={results.ppm.Mg} dp={0} />
+              <Box label="S" value={results.ppm.S} dp={0} />
+            </View>
+
+            {/* Micros */}
+            <Text style={[styles.section, { marginTop: 12 }]}>Micros (ppm)</Text>
+            <View style={styles.grid}>
+              <Box label="Fe" value={results.ppm.Fe} dp={2} />
+              <Box label="Mn" value={results.ppm.Mn} dp={2} />
+              <Box label="Zn" value={results.ppm.Zn} dp={2} />
+              <Box label="Cu" value={results.ppm.Cu} dp={2} />
+              <Box label="B" value={results.ppm.B} dp={2} />
+              <Box label="Mo" value={results.ppm.Mo} dp={2} />
+              <Box label="Total cost (RM)" value={results.costRM} dp={2} />
+            </View>
+
+            {/* EC */}
+            <Text style={[styles.section, { marginTop: 12 }]}>EC</Text>
+            <View style={styles.grid}>
+              <Box label="EC est. (mS/cm)" value={ecEstimate} dp={2} />
+            </View>
+            <View style={{ marginTop: 8, gap: 8 }}>
+              <L label="EC scale (multiplier)" v={ecScale} onChangeText={setEcScale} keyboardType="decimal-pad" />
+              <L label="Target EC (mS/cm) — optional" v={ecTarget} onChangeText={setEcTarget} keyboardType="decimal-pad" />
+              <L label="Measured EC (mS/cm) — optional" v={ecMeasured} onChangeText={setEcMeasured} keyboardType="decimal-pad" />
+              {!!num(ecTarget) && (
+                <Text style={{ color: "#333" }}>
+                  Δ to target: <Text style={{ fontWeight: "700" }}>{(num(ecTarget) - ecEstimate).toFixed(2)}</Text> mS/cm
+                </Text>
+              )}
+            </View>
+          </>
+        )}
+      </View>
+
+      <View style={{ flexDirection: "row", gap: 10 }}>
+        <Pressable onPress={saveRecipe} style={[styles.printBtn, { backgroundColor: "#2e7d32" }]}>
+          <Ionicons name="save-outline" size={18} color="#fff" /><Text style={styles.printText}>Save</Text>
+        </Pressable>
+        <Pressable onPress={onPrint} style={styles.printBtn}>
+          <Ionicons name="print-outline" size={18} color="#fff" /><Text style={styles.printText}>Print Work Order</Text>
+        </Pressable>
+      </View>
+
+      {/* Picker modal */}
+      <Modal visible={pickerOpen} animationType="slide" transparent>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Select fertilizer</Text>
+            <TextInput value={pickerFilter} onChangeText={setPickerFilter} placeholder="Search…" style={styles.input} autoFocus />
+            <ScrollView style={{ maxHeight: 360, marginTop: 8 }}>
+              {ferts
+                .filter((f) => (f.name || "").toLowerCase().includes(pickerFilter.trim().toLowerCase()))
+                .map((f) => (
+                  <Pressable key={f.id} onPress={() => selectFert(pickerIndex, f)} style={styles.pickRow}>
+                    <Ionicons name="leaf-outline" size={18} style={{ marginRight: 8 }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontWeight: "600" }}>{f.name}</Text>
+                      <Text style={{ color: "#666", fontSize: 12 }}>
+                        {f.bag_size_kg ? `${f.bag_size_kg} kg` : "—"} · {f.price_per_bag ? `RM ${f.price_per_bag}` : "no price"}
+                      </Text>
+                    </View>
+                  </Pressable>
+                ))}
+              {ferts.length === 0 && <Text style={{ color: "#666" }}>No fertilizers. Add some in the Fertilizer List tab.</Text>}
+            </ScrollView>
+            <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 10, marginTop: 10 }}>
+              <Pressable onPress={() => setPickerOpen(false)} style={[styles.pillBtn, { backgroundColor: "#eee" }]}><Text>Close</Text></Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </ScrollView>
+  );
+}
+
+// Small labeled input helper
+function L({ label, v, style, ...rest }) {
+  return (
+    <View>
+      <Text style={styles.smallLabel}>{label}</Text>
+      <TextInput value={v} {...rest} style={[styles.input, style]} />
+    </View>
+  );
+}
+
+function Box({ label, value, dp = 0 }) {
+  const n = Number(value);
+  const text = Number.isFinite(n) ? n.toFixed(dp) : (0).toFixed(dp);
+  return (
+    <View style={styles.box}>
+      <Text style={styles.boxLabel}>{label}</Text>
+      <Text style={styles.boxValue}>{text}</Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: "#fff", padding: 16 },
+  title: { fontSize: 22, fontWeight: "700", textAlign: "center", marginBottom: 8 },
+  card: { borderWidth: 1, borderColor: "#eee", borderRadius: 12, padding: 12, marginBottom: 12, backgroundColor: "#fff" },
+  section: { fontSize: 16, fontWeight: "700" },
+  label: { fontWeight: "600", marginBottom: 6 },
+  smallLabel: { color: "#555", marginBottom: 6, fontSize: 13 },
+  input: { borderWidth: 1, borderColor: "#ddd", borderRadius: 10, minHeight: 44, paddingHorizontal: 12, backgroundColor: "#fff" },
+  addBtn: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "#222", paddingHorizontal: 12, height: 40, borderRadius: 10 },
+  addText: { color: "#fff", fontWeight: "700" },
+  rowCard: { marginTop: 10, borderWidth: 1, borderColor: "#eee", borderRadius: 10, padding: 10, flexDirection: "row", alignItems: "flex-end" },
+  trashBtn: { marginLeft: 10, height: 40, width: 40, borderRadius: 10, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#eee" },
+  grid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },
+  box: { width: "31%", minWidth: 150, borderWidth: 1, borderColor: "#eee", borderRadius: 10, padding: 10 },
+  boxLabel: { color: "#666", fontSize: 12 },
+  boxValue: { fontSize: 18, fontWeight: "700" },
+  printBtn: { marginTop: 8, backgroundColor: "#222", height: 46, borderRadius: 10, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 },
+  printText: { color: "#fff", fontWeight: "700" },
+  modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.3)", justifyContent: "center", padding: 20 },
+  modalCard: { backgroundColor: "#fff", borderRadius: 14, padding: 16 },
+  modalTitle: { fontSize: 18, fontWeight: "700", marginBottom: 8 },
+  pickRow: { flexDirection: "row", alignItems: "center", paddingVertical: 8, paddingHorizontal: 6, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: "#eee" },
+  pillBtn: { paddingHorizontal: 14, height: 40, alignItems: "center", justifyContent: "center", borderRadius: 10 },
+});
