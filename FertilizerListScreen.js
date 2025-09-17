@@ -1,4 +1,4 @@
-// FertilizerListScreen.js — Supabase + header Sign-out (drop-in)
+// FertilizerListScreen.js — Supabase + header Sign-out + price/bag subtitle
 
 import React, {
   useCallback,
@@ -21,6 +21,13 @@ import {
 import { Swipeable } from "react-native-gesture-handler";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "./supabaseClient";
+
+function formatRM(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return `RM ${n.toFixed(2)}`;
+}
 
 export default function FertilizerListScreen({ navigation }) {
   const [items, setItems] = useState([]);
@@ -193,6 +200,14 @@ export default function FertilizerListScreen({ navigation }) {
       </View>
     );
 
+    const price = formatRM(item.price_per_bag);
+    const size = item.bag_size_kg ?? "";
+    const subtitle =
+      price && size ? `${price} / ${size} kg`
+      : price ? `${price}`
+      : size ? `${size} kg`
+      : "Tap to add details";
+
     return (
       <Swipeable renderRightActions={Right} overshootRight={false}>
         <Pressable
@@ -204,11 +219,14 @@ export default function FertilizerListScreen({ navigation }) {
           }
         >
           <View style={styles.card}>
-            <Ionicons name="leaf-outline" size={18} style={{ marginRight: 8 }} />
-            <Text style={styles.name} numberOfLines={2}>
-              {item.name || "(no name)"}
-            </Text>
-            <Ionicons name="chevron-forward" size={18} />
+            <Ionicons name="leaf-outline" size={20} style={{ marginRight: 10 }} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.name} numberOfLines={2}>
+                {item.name || "(no name)"}
+              </Text>
+              <Text style={styles.subtitle} numberOfLines={1}>{subtitle}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} />
           </View>
         </Pressable>
       </Swipeable>
@@ -335,7 +353,8 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     backgroundColor: "#fff",
   },
-  name: { flex: 1, fontSize: 16 },
+  name: { fontSize: 16, fontWeight: "600" },
+  subtitle: { fontSize: 12, color: "#6b7280" },
   actions: {
     flexDirection: "row",
     alignItems: "center",
