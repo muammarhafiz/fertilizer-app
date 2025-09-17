@@ -1,9 +1,8 @@
-// MixDirectScreen.js — DIRECT mixer with Save/Load + Work Order print (no House/Zone, no Operator)
-// - Reads fertilizers from Supabase
-// - Dose modes: "Total g in tank" or "g/L"
-// - Correct ppm math; Mg shown as ELEMENTAL (auto-converts MgO% → Mg% if name contains "MgO")
-// - Micros included; UI shows 0 dp for macros, 2 dp for micros & cost
-// - Save / Load recipes (recipes table) — we no longer show operator/houseZone fields
+// MixDirectScreen.js — DIRECT mixer with Save/Load + Work Order print + EC readout
+// - House/Zone and Operator removed (as requested)
+// - EC estimate shown (mS/cm) with simple salt coefficients and a global scale
+// - Optional Target EC & Measured EC inputs + Delta to target
+// - Keeps macros/micros math (Mg is ELEMENTAL), printing, and saving (recipes table)
 
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
@@ -30,6 +29,22 @@ const nowBatchId = () => {
   )}${pad(d.getMinutes())}`;
 };
 
+// --- EC helpers --------------------------------------------------------------
+// Very simple per-salt EC coefficients (mS/cm produced by 1 g/L of that salt).
+// These are approximate; they just give a sensible estimate for fertigation.
+// You can tune the "EC scale" field on-screen to calibrate to your meter.
+function inferECk(name = "") {
+  const n = (name || "").toLowerCase();
+
+  if (/calcinit|calcium nitrate|nitrabor/.test(n)) return 1.20;     // Ca(NO3)2-based
+  if (/krista k|potassium nitrate|kno3/.test(n)) return 1.10;       // KNO3
+  if (/mkp|mono potassium phosphate|kh2po4/.test(n)) return 0.90;   // MKP
+  if (/sop|potassium sulph|potassium sulf/.test(n)) return 0.80;    // K2SO4
+  if (/magnesium|epsom|krista mgs|mgso4/.test(n)) return 1.00;      // MgSO4·7H2O
+  if (/ferticare|kristalon|npk|complete/.test(n)) return 1.10;      // NPK blends
+  return 1.00; // default
+}
+
 export default function MixDirectScreen() {
   const route = useRoute();
   const navigation = useNavigation();
@@ -39,18 +54,23 @@ export default function MixDirectScreen() {
   const [doseMode, setDoseMode] = useState("total"); // "total" | "perL"
   const [ingredients, setIngredients] = useState([]); // [{key, fertId, name, gTotal, gPerL }]
 
-  // Job details (kept minimal: Batch ID + Notes only)
+  // Job details (minimal)
   const [batchId, setBatchId] = useState(nowBatchId());
   const [notes, setNotes] = useState("");
 
-  // Fertilizers from DB
+  // EC fields
+  const [ecScale, setEcScale] = useState("1.10"); // global calibration multiplier
+  const [ecTarget, setEcTarget] = useState("");   // optional target
+  const [ecMeasured, setEcMeasured] = useState(""); // optional measured
+
+  // Fertilizers
   const [loading, setLoading] = useState(true);
   const [ferts, setFerts] = useState([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerFilter, setPickerFilter] = useState("");
   const [pickerIndex, setPickerIndex] = useState(null);
 
-  // Load fertilizers
+  // Load fertilizers (shared or owned)
   const loadFerts = useCallback(async () => {
     try {
       setLoading(true);
@@ -66,10 +86,7 @@ export default function MixDirectScreen() {
       setLoading(false);
     }
   }, []);
-
-  useEffect(() => {
-    loadFerts();
-  }, [loadFerts]);
+  useEffect(() => { loadFerts(); }, [loadFerts]);
 
   // Picker helpers
   const addRow = () => {
@@ -90,7 +107,7 @@ export default function MixDirectScreen() {
   const vol = Math.max(0, num(volumeL));
   const getFert = (id) => ferts.find((f) => f.id === id);
 
-  // Totals
+  // Totals (ppm & cost)
   const results = useMemo(() => {
     let N=0,P2O5=0,K2O=0,Ca=0,Mg=0,S=0,Fe=0,Mn=0,Zn=0,Cu=0,B=0,Mo=0, cost=0;
     for (const row of ingredients) {
@@ -112,7 +129,26 @@ export default function MixDirectScreen() {
     return { ppm:{N,P2O5,K2O,Ca,Mg,S,Fe,Mn,Zn,Cu,B,Mo}, costRM: cost };
   }, [ingredients, ferts, doseMode, vol]);
 
-  // Recipe summary (used for QR & Save)
+  // EC estimate
+  const ecEstimate = useMemo(() => {
+    const scale = num(ecScale) || 1;
+    let sum = 0;
+    for (const row of ingredients) {
+      const fert = getFert(row.fertId);
+      if (!fert) continue;
+      const gPerL = doseMode === "total" ? (vol>0 ? num(row.gTotal)/vol : 0) : num(row.gPerL);
+      const k = inferECk(fert?.name || "");
+      sum += gPerL * k;
+    }
+    return sum * scale; // mS/cm
+  }, [ingredients, ferts, doseMode, vol, ecScale]);
+
+  const ecDeltaToTarget = useMemo(() => {
+    const t = num(ecTarget);
+    return t ? t - ecEstimate : 0;
+  }, [ecTarget, ecEstimate]);
+
+  // Recipe summary (used by QR; EC values included for print context only)
   const recipeSummary = useMemo(() => {
     const items = ingredients.map((r) => {
       const fert = getFert(r.fertId);
@@ -128,12 +164,13 @@ export default function MixDirectScreen() {
       items,
       ppm: results.ppm,
       costRM: results.costRM,
+      ec: { estimate: ecEstimate, target: num(ecTarget) || null, measured: num(ecMeasured) || null, scale: num(ecScale) || 1 },
       notes,
       ts: new Date().toISOString(),
     };
-  }, [ingredients, doseMode, vol, batchId, notes, results]);
+  }, [ingredients, doseMode, vol, batchId, notes, results, ecEstimate, ecTarget, ecMeasured, ecScale]);
 
-  // SAVE to Supabase (no house_zone/operator columns)
+  // SAVE (unchanged schema)
   const saveRecipe = async () => {
     try {
       const { data: u } = await supabase.auth.getUser();
@@ -158,7 +195,7 @@ export default function MixDirectScreen() {
     }
   };
 
-  // LOAD a saved recipe by id (when coming from Saved tab)
+  // LOAD by id (from Saved tab)
   const loadRecipeById = useCallback(async (id) => {
     try {
       const { data, error } = await supabase.from("recipes").select("*").eq("id", id).single();
@@ -167,7 +204,6 @@ export default function MixDirectScreen() {
       setNotes(data.notes || "");
       setVolumeL(String(data.volume_l || 0));
       setDoseMode(data.dose_mode || "total");
-
       const ing = (data.items || []).map((it) => {
         const perL = data.volume_l > 0 ? (Number(it.grams || 0) / Number(data.volume_l)) : 0;
         return {
@@ -184,8 +220,6 @@ export default function MixDirectScreen() {
       Alert.alert("Load error", e.message ?? String(e));
     }
   }, []);
-
-  // React to navigation param loadRecipeId
   useFocusEffect(useCallback(() => {
     const id = route.params?.loadRecipeId;
     if (id) {
@@ -194,7 +228,7 @@ export default function MixDirectScreen() {
     }
   }, [route.params?.loadRecipeId, loadRecipeById, navigation]));
 
-  // Work Order print (House/Zone + Operator removed)
+  // Print Work Order (adds EC section)
   const onPrintWorkOrder = () => {
     const round0 = (x) => (Number.isFinite(x) ? Math.round(x) : 0);
     const fx2 = (x) => (Number.isFinite(x) ? x.toFixed(2) : "0.00");
@@ -215,12 +249,13 @@ th,td{border:1px solid #ddd;padding:8px;text-align:left;vertical-align:top}th{ba
       <tr><th style="width:160px">Batch ID</th><td>${batchId}</td></tr>
       <tr><th>Volume</th><td><b>${vol}</b> L</td></tr>
       <tr><th>Dose mode</th><td><b>${doseMode === "total" ? "Total g in tank" : "g/L"}</b></td></tr>
+      <tr><th>EC (est.)</th><td><b>${fx2(ecEstimate)}</b> mS/cm  ·  scale ${fx2(Number(ecScale)||1)}</td></tr>
+      ${num(ecTarget) ? `<tr><th>EC target</th><td>${fx2(num(ecTarget))} mS/cm (Δ ${fx2(ecDeltaToTarget)})</td></tr>` : ""}
+      ${num(ecMeasured) ? `<tr><th>EC measured</th><td>${fx2(num(ecMeasured))} mS/cm</td></tr>` : ""}
     </table>
   </div>
-  <div>
-    <div class="qr"><img src="${qrUrl}" width="160" height="160" alt="QR Recipe"/></div>
-    <div class="muted">QR contains the recipe JSON (batch, items, ppm, cost).</div>
-  </div>
+  <div><div class="qr"><img src="${qrUrl}" width="160" height="160" alt="QR Recipe"/></div>
+  <div class="muted">QR contains the recipe JSON (batch, items, ppm, cost, EC fields).</div></div>
 </div>
 
 <h2>Ingredients</h2>
@@ -249,7 +284,7 @@ return `<tr><td>${i+1}</td><td>${f.name}</td><td>${doseMode==="total"? totalG : 
     <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 24 }}>
       <Text style={styles.title}>Direct Mix</Text>
 
-      {/* Job details (only Batch ID + Notes) */}
+      {/* Job details */}
       <View style={styles.card}>
         <Text style={styles.section}>Job details</Text>
         <View style={{ marginTop: 8, gap: 8 }}>
@@ -310,11 +345,12 @@ return `<tr><td>${i+1}</td><td>${f.name}</td><td>${doseMode==="total"? totalG : 
         })}
       </View>
 
-      {/* Totals */}
+      {/* Totals + EC */}
       <View style={styles.card}>
         <Text style={styles.section}>Totals at dripper (ppm)</Text>
         {loading ? <ActivityIndicator /> : (
           <>
+            {/* Macros */}
             <View style={styles.grid}>
               <Box label="N" value={results.ppm.N} dp={0} />
               <Box label="P₂O₅" value={results.ppm.P2O5} dp={0} />
@@ -323,6 +359,8 @@ return `<tr><td>${i+1}</td><td>${f.name}</td><td>${doseMode==="total"? totalG : 
               <Box label="Mg (elemental)" value={results.ppm.Mg} dp={0} />
               <Box label="S" value={results.ppm.S} dp={0} />
             </View>
+
+            {/* Micros */}
             <Text style={[styles.section, { marginTop: 12 }]}>Micros (ppm)</Text>
             <View style={styles.grid}>
               <Box label="Fe" value={results.ppm.Fe} dp={2} />
@@ -332,6 +370,37 @@ return `<tr><td>${i+1}</td><td>${f.name}</td><td>${doseMode==="total"? totalG : 
               <Box label="B" value={results.ppm.B} dp={2} />
               <Box label="Mo" value={results.ppm.Mo} dp={2} />
               <Box label="Total cost (RM)" value={results.costRM} dp={2} />
+            </View>
+
+            {/* EC Readout */}
+            <Text style={[styles.section, { marginTop: 12 }]}>EC</Text>
+            <View style={styles.grid}>
+              <Box label="EC est. (mS/cm)" value={ecEstimate} dp={2} />
+            </View>
+            <View style={{ marginTop: 8, gap: 8 }}>
+              <LabeledInput
+                label="EC scale (multiplier)"
+                value={ecScale}
+                onChangeText={setEcScale}
+                keyboardType="decimal-pad"
+              />
+              <LabeledInput
+                label="Target EC (mS/cm) — optional"
+                value={ecTarget}
+                onChangeText={setEcTarget}
+                keyboardType="decimal-pad"
+              />
+              <LabeledInput
+                label="Measured EC (mS/cm) — optional"
+                value={ecMeasured}
+                onChangeText={setEcMeasured}
+                keyboardType="decimal-pad"
+              />
+              {!!num(ecTarget) && (
+                <Text style={{ color: "#333" }}>
+                  Δ to target: <Text style={{ fontWeight: "700" }}>{(ecDeltaToTarget).toFixed(2)}</Text> mS/cm
+                </Text>
+              )}
             </View>
           </>
         )}
