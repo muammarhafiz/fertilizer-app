@@ -1,10 +1,10 @@
 // MixDirectScreen.js — DIRECT solution mixer (Supabase) with MACROS + MICROS
-// - Pulls fertilizers from DB (shared or owned)
+// - Reads fertilizers from DB (shared or owned via RLS)
 // - Dose modes: "Total g in tank" (default) or "g/L"
-// - Correct ppm math (Mg shown as ELEMENTAL; auto-convert MgO→Mg when name mentions "MgO")
-// - Totals now include Fe, Mn, Zn, Cu, B, Mo (ppm)
-// - Cost = total grams actually added × (price_per_bag / (bag_size_kg * 1000))
-// - Simple searchable picker + printable summary
+// - Correct ppm math; Mg is ELEMENTAL (auto-converts MgO% → Mg% if name contains "MgO")
+// - Micros (Fe, Mn, Zn, Cu, B, Mo) included
+// - UI shows 0 dp for macros, 2 dp for micros & cost
+// - Print page mirrors on-screen values
 
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
@@ -36,7 +36,7 @@ export default function MixDirectScreen() {
   const [pickerFilter, setPickerFilter] = useState("");
   const [pickerIndex, setPickerIndex] = useState(null); // which ingredient row is choosing
 
-  // Load fertilizers (shared or own)
+  // Load fertilizers (shared or owned)
   const loadFerts = useCallback(async () => {
     try {
       setLoading(true);
@@ -96,7 +96,6 @@ export default function MixDirectScreen() {
     return Number.isFinite(n) ? n : 0;
   };
   const vol = Math.max(0, num(volumeL));
-
   const getFert = (id) => ferts.find((f) => f.id === id);
 
   // Compute totals
@@ -137,7 +136,7 @@ export default function MixDirectScreen() {
       // Percent helpers (null/undefined => 0)
       const pct = (v) => (v == null || v === "" ? 0 : Number(v));
 
-      // Mg handling: store/show as ELEMENTAL Mg.
+      // Mg handling: store/show as ELEMENTAL Mg (convert if label is MgO%)
       let Mg_percent = pct(npk.Mg);
       if (Mg_percent > 0 && /MgO/i.test(name)) {
         Mg_percent = Mg_percent * MgO_TO_Mg;
@@ -151,7 +150,7 @@ export default function MixDirectScreen() {
       Mg_ppm += gPerL * Mg_percent * 10;
       S_ppm += gPerL * pct(npk.S) * 10;
 
-      // micros ppm (percent → ppm via ×10)
+      // micros ppm
       Fe_ppm += gPerL * pct(micro.Fe) * 10;
       Mn_ppm += gPerL * pct(micro.Mn) * 10;
       Zn_ppm += gPerL * pct(micro.Zn) * 10;
@@ -192,6 +191,7 @@ export default function MixDirectScreen() {
   const onPrint = () => {
     const round0 = (x) => (Number.isFinite(x) ? Math.round(x) : 0);
     const fixed2 = (x) => (Number.isFinite(x) ? x.toFixed(2) : "0.00");
+    const microFmt = (x) => (Number.isFinite(x) ? x.toFixed(2) : "0.00");
 
     const html = `
 <!doctype html>
@@ -249,12 +249,12 @@ export default function MixDirectScreen() {
       <tr><td>Ca</td><td>${round0(results.ppm.Ca)}</td></tr>
       <tr><td>Mg (elemental)</td><td>${round0(results.ppm.Mg)}</td></tr>
       <tr><td>S</td><td>${round0(results.ppm.S)}</td></tr>
-      <tr><td>Fe</td><td>${round0(results.ppm.Fe)}</td></tr>
-      <tr><td>Mn</td><td>${round0(results.ppm.Mn)}</td></tr>
-      <tr><td>Zn</td><td>${round0(results.ppm.Zn)}</td></tr>
-      <tr><td>Cu</td><td>${round0(results.ppm.Cu)}</td></tr>
-      <tr><td>B</td><td>${round0(results.ppm.B)}</td></tr>
-      <tr><td>Mo</td><td>${round0(results.ppm.Mo)}</td></tr>
+      <tr><td>Fe</td><td>${microFmt(results.ppm.Fe)}</td></tr>
+      <tr><td>Mn</td><td>${microFmt(results.ppm.Mn)}</td></tr>
+      <tr><td>Zn</td><td>${microFmt(results.ppm.Zn)}</td></tr>
+      <tr><td>Cu</td><td>${microFmt(results.ppm.Cu)}</td></tr>
+      <tr><td>B</td><td>${microFmt(results.ppm.B)}</td></tr>
+      <tr><td>Mo</td><td>${microFmt(results.ppm.Mo)}</td></tr>
       <tr class="tot"><td>Total cost (RM)</td><td>${fixed2(results.costRM)}</td></tr>
     </tbody>
   </table>
@@ -375,25 +375,26 @@ export default function MixDirectScreen() {
           <ActivityIndicator />
         ) : (
           <>
+            {/* Macros (0 dp) */}
             <View style={styles.grid}>
-              {/* Macros */}
-              <Box label="N" value={results.ppm.N} />
-              <Box label="P₂O₅" value={results.ppm.P2O5} />
-              <Box label="K₂O" value={results.ppm.K2O} />
-              <Box label="Ca" value={results.ppm.Ca} />
-              <Box label="Mg (elemental)" value={results.ppm.Mg} />
-              <Box label="S" value={results.ppm.S} />
+              <Box label="N" value={results.ppm.N} dp={0} />
+              <Box label="P₂O₅" value={results.ppm.P2O5} dp={0} />
+              <Box label="K₂O" value={results.ppm.K2O} dp={0} />
+              <Box label="Ca" value={results.ppm.Ca} dp={0} />
+              <Box label="Mg (elemental)" value={results.ppm.Mg} dp={0} />
+              <Box label="S" value={results.ppm.S} dp={0} />
             </View>
 
+            {/* Micros (2 dp) */}
             <Text style={[styles.section, { marginTop: 12 }]}>Micros (ppm)</Text>
             <View style={styles.grid}>
-              <Box label="Fe" value={results.ppm.Fe} />
-              <Box label="Mn" value={results.ppm.Mn} />
-              <Box label="Zn" value={results.ppm.Zn} />
-              <Box label="Cu" value={results.ppm.Cu} />
-              <Box label="B" value={results.ppm.B} />
-              <Box label="Mo" value={results.ppm.Mo} />
-              <Box label="Total cost (RM)" value={results.costRM} fixed2 />
+              <Box label="Fe" value={results.ppm.Fe} dp={2} />
+              <Box label="Mn" value={results.ppm.Mn} dp={2} />
+              <Box label="Zn" value={results.ppm.Zn} dp={2} />
+              <Box label="Cu" value={results.ppm.Cu} dp={2} />
+              <Box label="B" value={results.ppm.B} dp={2} />
+              <Box label="Mo" value={results.ppm.Mo} dp={2} />
+              <Box label="Total cost (RM)" value={results.costRM} dp={2} />
             </View>
           </>
         )}
@@ -458,10 +459,10 @@ export default function MixDirectScreen() {
   );
 }
 
-function Box({ label, value, fixed2 = false }) {
+// Small box UI — dp = number of decimals (0 for macros, 2 for micros & cost)
+function Box({ label, value, dp = 0 }) {
   const v = Number(value);
-  const text =
-    Number.isFinite(v) ? (fixed2 ? v.toFixed(2) : Math.round(v).toString()) : "0";
+  const text = Number.isFinite(v) ? v.toFixed(dp) : (0).toFixed(dp);
   return (
     <View style={styles.box}>
       <Text style={styles.boxLabel}>{label}</Text>
