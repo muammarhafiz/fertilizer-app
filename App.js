@@ -5,11 +5,12 @@ import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Ionicons } from "@expo/vector-icons";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import AuthGate from "./AuthGate";
 import MixDirectScreen from "./MixDirectScreen";
 import FertilizerListScreen from "./FertilizerListScreen";
-import FertilizerDetailScreen from "./FertilizerDetailScreen"; // you already have this
+import FertilizerDetailScreen from "./FertilizerDetailScreen";
 import SavedRecipesScreen from "./SavedRecipesScreen";
 
 const Stack = createNativeStackNavigator();
@@ -39,13 +40,15 @@ function TabsNav() {
 
 export default function App() {
   return (
-    <NavigationContainer>
-      <AuthGate>
-        <Stack.Navigator>
-          <Stack.Screen name="HomeTabs" component={TabsNav} options={{ headerShown: false }} />
-          <Stack.Screen name="FertilizerDetail" component={FertilizerDetailScreen} options={{ title: "Fertilizer" }} />
-        </Stack.Navigator>
-      </AuthGate>
-    </NavigationContainer>
+    <SafeAreaProvider>
+      <NavigationContainer>
+        <AuthGate>
+          <Stack.Navigator>
+            <Stack.Screen name="HomeTabs" component={TabsNav} options={{ headerShown: false }} />
+            <Stack.Screen name="FertilizerDetail" component={FertilizerDetailScreen} options={{ title: "Fertilizer" }} />
+          </Stack.Navigator>
+        </AuthGate>
+      </NavigationContainer>
+    </SafeAreaProvider>
   );
 }
