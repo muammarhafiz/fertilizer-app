@@ -1,4 +1,9 @@
-// MixDirectScreen.js — DIRECT mixer with Save/Load + Work Order print + micros decimals
+// MixDirectScreen.js — DIRECT mixer with Save/Load + Work Order print (no House/Zone, no Operator)
+// - Reads fertilizers from Supabase
+// - Dose modes: "Total g in tank" or "g/L"
+// - Correct ppm math; Mg shown as ELEMENTAL (auto-converts MgO% → Mg% if name contains "MgO")
+// - Micros included; UI shows 0 dp for macros, 2 dp for micros & cost
+// - Save / Load recipes (recipes table) — we no longer show operator/houseZone fields
 
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
@@ -34,10 +39,8 @@ export default function MixDirectScreen() {
   const [doseMode, setDoseMode] = useState("total"); // "total" | "perL"
   const [ingredients, setIngredients] = useState([]); // [{key, fertId, name, gTotal, gPerL }]
 
-  // Job details
+  // Job details (kept minimal: Batch ID + Notes only)
   const [batchId, setBatchId] = useState(nowBatchId());
-  const [houseZone, setHouseZone] = useState("");
-  const [operatorName, setOperatorName] = useState("");
   const [notes, setNotes] = useState("");
 
   // Fertilizers from DB
@@ -64,9 +67,11 @@ export default function MixDirectScreen() {
     }
   }, []);
 
-  useEffect(() => { loadFerts(); }, [loadFerts]);
+  useEffect(() => {
+    loadFerts();
+  }, [loadFerts]);
 
-  // Open picker
+  // Picker helpers
   const addRow = () => {
     setIngredients((prev) => [
       ...prev,
@@ -107,7 +112,7 @@ export default function MixDirectScreen() {
     return { ppm:{N,P2O5,K2O,Ca,Mg,S,Fe,Mn,Zn,Cu,B,Mo}, costRM: cost };
   }, [ingredients, ferts, doseMode, vol]);
 
-  // Build recipe summary (used for Save and QR)
+  // Recipe summary (used for QR & Save)
   const recipeSummary = useMemo(() => {
     const items = ingredients.map((r) => {
       const fert = getFert(r.fertId);
@@ -117,16 +122,18 @@ export default function MixDirectScreen() {
     }).filter(Boolean);
     return {
       type: "direct",
-      batchId, houseZone, operator: operatorName, notes,
-      doseMode, volumeL: vol,
+      batchId,
+      volumeL: vol,
+      doseMode,
       items,
       ppm: results.ppm,
       costRM: results.costRM,
+      notes,
       ts: new Date().toISOString(),
     };
-  }, [ingredients, doseMode, vol, batchId, houseZone, operatorName, notes, results]);
+  }, [ingredients, doseMode, vol, batchId, notes, results]);
 
-  // SAVE to Supabase
+  // SAVE to Supabase (no house_zone/operator columns)
   const saveRecipe = async () => {
     try {
       const { data: u } = await supabase.auth.getUser();
@@ -136,8 +143,6 @@ export default function MixDirectScreen() {
         owner: user.id,
         shared: true,
         batch_id: batchId,
-        house_zone: houseZone,
-        operator: operatorName,
         notes,
         dose_mode: doseMode,
         volume_l: vol,
@@ -145,11 +150,9 @@ export default function MixDirectScreen() {
         ppm: recipeSummary.ppm,
         cost_rm: recipeSummary.costRM,
       };
-      const { data, error } = await supabase.from("recipes").insert([payload]).select().single();
+      const { error } = await supabase.from("recipes").insert([payload]);
       if (error) throw error;
       Alert.alert("Saved", `Recipe saved as "${batchId}".`);
-      // Optionally jump to Saved tab:
-      // navigation.navigate("Saved");
     } catch (e) {
       Alert.alert("Save error", e.message ?? String(e));
     }
@@ -158,17 +161,9 @@ export default function MixDirectScreen() {
   // LOAD a saved recipe by id (when coming from Saved tab)
   const loadRecipeById = useCallback(async (id) => {
     try {
-      const { data, error } = await supabase
-        .from("recipes")
-        .select("*")
-        .eq("id", id)
-        .single();
+      const { data, error } = await supabase.from("recipes").select("*").eq("id", id).single();
       if (error) throw error;
-
-      // Refill UI
       setBatchId(data.batch_id || nowBatchId());
-      setHouseZone(data.house_zone || "");
-      setOperatorName(data.operator || "");
       setNotes(data.notes || "");
       setVolumeL(String(data.volume_l || 0));
       setDoseMode(data.dose_mode || "total");
@@ -195,12 +190,11 @@ export default function MixDirectScreen() {
     const id = route.params?.loadRecipeId;
     if (id) {
       loadRecipeById(id);
-      // clear the param so it doesn't auto-reload again
       navigation.setParams({ loadRecipeId: undefined });
     }
   }, [route.params?.loadRecipeId, loadRecipeById, navigation]));
 
-  // Work Order print (same as before, shortened for brevity)
+  // Work Order print (House/Zone + Operator removed)
   const onPrintWorkOrder = () => {
     const round0 = (x) => (Number.isFinite(x) ? Math.round(x) : 0);
     const fx2 = (x) => (Number.isFinite(x) ? x.toFixed(2) : "0.00");
@@ -219,14 +213,14 @@ th,td{border:1px solid #ddd;padding:8px;text-align:left;vertical-align:top}th{ba
   <div>
     <table>
       <tr><th style="width:160px">Batch ID</th><td>${batchId}</td></tr>
-      <tr><th>House / Zone</th><td>${houseZone || "—"}</td></tr>
-      <tr><th>Operator</th><td>${operatorName || "—"}</td></tr>
       <tr><th>Volume</th><td><b>${vol}</b> L</td></tr>
       <tr><th>Dose mode</th><td><b>${doseMode === "total" ? "Total g in tank" : "g/L"}</b></td></tr>
     </table>
   </div>
-  <div><div class="qr"><img src="${qrUrl}" width="160" height="160" alt="QR Recipe"/></div>
-  <div class="muted">QR contains the recipe JSON (batch, items, ppm, cost).</div></div>
+  <div>
+    <div class="qr"><img src="${qrUrl}" width="160" height="160" alt="QR Recipe"/></div>
+    <div class="muted">QR contains the recipe JSON (batch, items, ppm, cost).</div>
+  </div>
 </div>
 
 <h2>Ingredients</h2>
@@ -255,13 +249,11 @@ return `<tr><td>${i+1}</td><td>${f.name}</td><td>${doseMode==="total"? totalG : 
     <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 24 }}>
       <Text style={styles.title}>Direct Mix</Text>
 
-      {/* Job details */}
+      {/* Job details (only Batch ID + Notes) */}
       <View style={styles.card}>
         <Text style={styles.section}>Job details</Text>
         <View style={{ marginTop: 8, gap: 8 }}>
           <LabeledInput label="Batch ID" value={batchId} onChangeText={setBatchId} />
-          <LabeledInput label="House / Zone" value={houseZone} onChangeText={setHouseZone} />
-          <LabeledInput label="Operator" value={operatorName} onChangeText={setOperatorName} />
           <LabeledInput label="Notes" value={notes} onChangeText={setNotes} multiline numberOfLines={3} />
         </View>
       </View>
