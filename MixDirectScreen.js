@@ -1,8 +1,9 @@
-// MixDirectScreen.js — DIRECT mixer with Save/Load + Work Order print + EC readout
-// - House/Zone and Operator removed (as requested)
-// - EC estimate shown (mS/cm) with simple salt coefficients and a global scale
-// - Optional Target EC & Measured EC inputs + Delta to target
-// - Keeps macros/micros math (Mg is ELEMENTAL), printing, and saving (recipes table)
+// MixDirectScreen.js — Direct mixer with g/kg toggle + EC, save/load, print
+// - Units toggle for ingredient entry: grams or kilograms
+// - Dose modes: total (in tank) or per L
+// - Mg shown as ELEMENTAL (auto converts MgO% → Mg% if name contains "MgO")
+// - EC estimate with adjustable scale; prints in Work Order
+// - Saves recipes to Supabase (unchanged schema)
 
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
@@ -29,39 +30,38 @@ const nowBatchId = () => {
   )}${pad(d.getMinutes())}`;
 };
 
-// --- EC helpers --------------------------------------------------------------
-// Very simple per-salt EC coefficients (mS/cm produced by 1 g/L of that salt).
-// These are approximate; they just give a sensible estimate for fertigation.
-// You can tune the "EC scale" field on-screen to calibrate to your meter.
+// EC coefficients (mS/cm from 1 g/L of salt) — simple approximations
 function inferECk(name = "") {
   const n = (name || "").toLowerCase();
-
-  if (/calcinit|calcium nitrate|nitrabor/.test(n)) return 1.20;     // Ca(NO3)2-based
-  if (/krista k|potassium nitrate|kno3/.test(n)) return 1.10;       // KNO3
-  if (/mkp|mono potassium phosphate|kh2po4/.test(n)) return 0.90;   // MKP
-  if (/sop|potassium sulph|potassium sulf/.test(n)) return 0.80;    // K2SO4
-  if (/magnesium|epsom|krista mgs|mgso4/.test(n)) return 1.00;      // MgSO4·7H2O
-  if (/ferticare|kristalon|npk|complete/.test(n)) return 1.10;      // NPK blends
-  return 1.00; // default
+  if (/calcinit|calcium nitrate|nitrabor/.test(n)) return 1.20;
+  if (/krista k|potassium nitrate|kno3/.test(n)) return 1.10;
+  if (/mkp|mono potassium phosphate|kh2po4/.test(n)) return 0.90;
+  if (/sop|potassium sulph|potassium sulf/.test(n)) return 0.80;
+  if (/magnesium|epsom|krista mgs|mgso4/.test(n)) return 1.00;
+  if (/ferticare|kristalon|npk|complete/.test(n)) return 1.10;
+  return 1.00;
 }
 
 export default function MixDirectScreen() {
   const route = useRoute();
   const navigation = useNavigation();
 
+  // Global units for ingredient inputs
+  const [weightUnit, setWeightUnit] = useState("g"); // "g" | "kg"
+
   // Inputs
   const [volumeL, setVolumeL] = useState("100");
   const [doseMode, setDoseMode] = useState("total"); // "total" | "perL"
   const [ingredients, setIngredients] = useState([]); // [{key, fertId, name, gTotal, gPerL }]
 
-  // Job details (minimal)
+  // Job details
   const [batchId, setBatchId] = useState(nowBatchId());
   const [notes, setNotes] = useState("");
 
   // EC fields
-  const [ecScale, setEcScale] = useState("1.10"); // global calibration multiplier
-  const [ecTarget, setEcTarget] = useState("");   // optional target
-  const [ecMeasured, setEcMeasured] = useState(""); // optional measured
+  const [ecScale, setEcScale] = useState("1.10");
+  const [ecTarget, setEcTarget] = useState("");
+  const [ecMeasured, setEcMeasured] = useState("");
 
   // Fertilizers
   const [loading, setLoading] = useState(true);
@@ -70,7 +70,7 @@ export default function MixDirectScreen() {
   const [pickerFilter, setPickerFilter] = useState("");
   const [pickerIndex, setPickerIndex] = useState(null);
 
-  // Load fertilizers (shared or owned)
+  // Load fertilizers
   const loadFerts = useCallback(async () => {
     try {
       setLoading(true);
@@ -88,7 +88,13 @@ export default function MixDirectScreen() {
   }, []);
   useEffect(() => { loadFerts(); }, [loadFerts]);
 
-  // Picker helpers
+  // Helpers
+  const num = (s) => (Number.isFinite(Number(s)) ? Number(s) : 0);
+  const vol = Math.max(0, num(volumeL));
+  const getFert = (id) => ferts.find((f) => f.id === id);
+  const unitFactor = weightUnit === "kg" ? 1000 : 1; // convert UI → grams
+
+  // Ingredient rows UI
   const addRow = () => {
     setIngredients((prev) => [
       ...prev,
@@ -102,32 +108,45 @@ export default function MixDirectScreen() {
     setPickerOpen(false);
   };
 
-  // Helpers
-  const num = (s) => (Number.isFinite(Number(s)) ? Number(s) : 0);
-  const vol = Math.max(0, num(volumeL));
-  const getFert = (id) => ferts.find((f) => f.id === id);
-
-  // Totals (ppm & cost)
+  // PPM, cost
   const results = useMemo(() => {
     let N=0,P2O5=0,K2O=0,Ca=0,Mg=0,S=0,Fe=0,Mn=0,Zn=0,Cu=0,B=0,Mo=0, cost=0;
+
     for (const row of ingredients) {
       const fert = getFert(row.fertId);
       if (!fert) continue;
-      const npk = fert.npk || {}; const micro = fert.micro || {};
-      const name = fert.name || "";
-      const gPerL = doseMode === "total" ? (vol>0 ? num(row.gTotal)/vol : 0) : num(row.gPerL);
+
+      // Convert UI entry to grams
+      const gramsTotal = doseMode === "total"
+        ? num(row.gTotal) * unitFactor
+        : num(row.gPerL) * unitFactor * vol; // total grams = (g/L or kg/L) * L
+
+      const gPerL = vol > 0 ? gramsTotal / vol : 0;
+
+      const npk = fert.npk || {}, micro = fert.micro || {};
       const pct = (v)=> (v==null || v==="" ? 0 : Number(v));
-      let Mg_pct = pct(npk.Mg); if (Mg_pct>0 && /MgO/i.test(name)) Mg_pct = Mg_pct * MgO_TO_Mg;
-      N += gPerL*pct(npk.N)*10; P2O5 += gPerL*pct(npk.P2O5)*10; K2O += gPerL*pct(npk.K2O)*10;
-      Ca += gPerL*pct(npk.Ca)*10; Mg += gPerL*Mg_pct*10; S += gPerL*pct(npk.S)*10;
-      Fe += gPerL*pct(micro.Fe)*10; Mn += gPerL*pct(micro.Mn)*10; Zn += gPerL*pct(micro.Zn)*10;
-      Cu += gPerL*pct(micro.Cu)*10; B += gPerL*pct(micro.B)*10; Mo += gPerL*pct(micro.Mo)*10;
+      let Mg_pct = pct(npk.Mg);
+      if (Mg_pct>0 && /MgO/i.test(fert.name || "")) Mg_pct *= MgO_TO_Mg;
+
+      N   += gPerL*pct(npk.N)   *10;
+      P2O5+= gPerL*pct(npk.P2O5)*10;
+      K2O += gPerL*pct(npk.K2O) *10;
+      Ca  += gPerL*pct(npk.Ca)  *10;
+      Mg  += gPerL*Mg_pct       *10;
+      S   += gPerL*pct(npk.S)   *10;
+
+      Fe  += gPerL*pct(micro.Fe)*10;
+      Mn  += gPerL*pct(micro.Mn)*10;
+      Zn  += gPerL*pct(micro.Zn)*10;
+      Cu  += gPerL*pct(micro.Cu)*10;
+      B   += gPerL*pct(micro.B) *10;
+      Mo  += gPerL*pct(micro.Mo)*10;
+
       const price = Number(fert.price_per_bag)||0, bagKg=Number(fert.bag_size_kg)||0;
-      const totalG = doseMode==="total" ? num(row.gTotal) : num(row.gPerL)*vol;
-      if (price>0 && bagKg>0) cost += totalG * (price/(bagKg*1000));
+      if (price>0 && bagKg>0) cost += gramsTotal * (price/(bagKg*1000));
     }
     return { ppm:{N,P2O5,K2O,Ca,Mg,S,Fe,Mn,Zn,Cu,B,Mo}, costRM: cost };
-  }, [ingredients, ferts, doseMode, vol]);
+  }, [ingredients, ferts, doseMode, vol, unitFactor]);
 
   // EC estimate
   const ecEstimate = useMemo(() => {
@@ -136,24 +155,28 @@ export default function MixDirectScreen() {
     for (const row of ingredients) {
       const fert = getFert(row.fertId);
       if (!fert) continue;
-      const gPerL = doseMode === "total" ? (vol>0 ? num(row.gTotal)/vol : 0) : num(row.gPerL);
-      const k = inferECk(fert?.name || "");
-      sum += gPerL * k;
+      const gramsTotal = doseMode === "total"
+        ? num(row.gTotal) * unitFactor
+        : num(row.gPerL) * unitFactor * vol;
+      const gPerL = vol > 0 ? gramsTotal / vol : 0;
+      sum += gPerL * inferECk(fert?.name || "");
     }
-    return sum * scale; // mS/cm
-  }, [ingredients, ferts, doseMode, vol, ecScale]);
+    return sum * scale;
+  }, [ingredients, ferts, doseMode, vol, ecScale, unitFactor]);
 
   const ecDeltaToTarget = useMemo(() => {
     const t = num(ecTarget);
     return t ? t - ecEstimate : 0;
   }, [ecTarget, ecEstimate]);
 
-  // Recipe summary (used by QR; EC values included for print context only)
+  // Recipe summary (store grams in GRAMS regardless of UI unit)
   const recipeSummary = useMemo(() => {
     const items = ingredients.map((r) => {
       const fert = getFert(r.fertId);
       if (!fert) return null;
-      const grams = doseMode === "total" ? num(r.gTotal) : num(r.gPerL) * vol;
+      const grams = doseMode === "total"
+        ? num(r.gTotal) * unitFactor
+        : num(r.gPerL) * unitFactor * vol;
       return { fert_id: fert.id, name: fert.name, grams };
     }).filter(Boolean);
     return {
@@ -161,6 +184,7 @@ export default function MixDirectScreen() {
       batchId,
       volumeL: vol,
       doseMode,
+      unit: weightUnit,
       items,
       ppm: results.ppm,
       costRM: results.costRM,
@@ -168,9 +192,9 @@ export default function MixDirectScreen() {
       notes,
       ts: new Date().toISOString(),
     };
-  }, [ingredients, doseMode, vol, batchId, notes, results, ecEstimate, ecTarget, ecMeasured, ecScale]);
+  }, [ingredients, doseMode, vol, batchId, notes, results, ecEstimate, ecTarget, ecMeasured, ecScale, weightUnit, unitFactor]);
 
-  // SAVE (unchanged schema)
+  // Save to Supabase
   const saveRecipe = async () => {
     try {
       const { data: u } = await supabase.auth.getUser();
@@ -195,7 +219,7 @@ export default function MixDirectScreen() {
     }
   };
 
-  // LOAD by id (from Saved tab)
+  // Load by id (from Saved tab)
   const loadRecipeById = useCallback(async (id) => {
     try {
       const { data, error } = await supabase.from("recipes").select("*").eq("id", id).single();
@@ -204,14 +228,17 @@ export default function MixDirectScreen() {
       setNotes(data.notes || "");
       setVolumeL(String(data.volume_l || 0));
       setDoseMode(data.dose_mode || "total");
+
+      // populate rows in current UI unit (default 'g')
       const ing = (data.items || []).map((it) => {
-        const perL = data.volume_l > 0 ? (Number(it.grams || 0) / Number(data.volume_l)) : 0;
+        const grams = Number(it.grams || 0);         // stored in grams
+        const perL = data.volume_l > 0 ? grams / Number(data.volume_l) : 0; // grams per L
         return {
           key: String(Math.random()),
           fertId: it.fert_id || null,
           name: it.name || "",
-          gTotal: data.dose_mode === "total" ? String(it.grams || "") : "",
-          gPerL: data.dose_mode === "perL" ? String(perL) : "",
+          gTotal: data.dose_mode === "total" ? String(grams / unitFactor) : "",
+          gPerL:  data.dose_mode === "perL"   ? String(perL / unitFactor)  : "",
         };
       });
       setIngredients(ing);
@@ -219,7 +246,8 @@ export default function MixDirectScreen() {
     } catch (e) {
       Alert.alert("Load error", e.message ?? String(e));
     }
-  }, []);
+  }, [unitFactor]);
+
   useFocusEffect(useCallback(() => {
     const id = route.params?.loadRecipeId;
     if (id) {
@@ -228,41 +256,44 @@ export default function MixDirectScreen() {
     }
   }, [route.params?.loadRecipeId, loadRecipeById, navigation]));
 
-  // Print Work Order (adds EC section)
+  // Print Work Order (shows selected unit)
   const onPrintWorkOrder = () => {
     const round0 = (x) => (Number.isFinite(x) ? Math.round(x) : 0);
     const fx2 = (x) => (Number.isFinite(x) ? x.toFixed(2) : "0.00");
     const micro = (x) => (Number.isFinite(x) ? x.toFixed(2) : "0.00");
-    const qrPayload = encodeURIComponent(JSON.stringify(recipeSummary));
-    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${qrPayload}`;
+
+    const unitMass = weightUnit === "kg" ? "kg" : "g";
+    const unitPerL = weightUnit === "kg" ? "kg/L" : "g/L";
+
     const html = `
 <!doctype html><html><head><meta charset="utf-8"/><title>Work Order — Direct Mix</title>
 <style>body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;padding:24px;color:#111;}
 h1{margin:0 0 8px;}h2{margin:16px 0 8px;}table{border-collapse:collapse;width:100%;margin-top:8px}
 th,td{border:1px solid #ddd;padding:8px;text-align:left;vertical-align:top}th{background:#f7f7f7}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px}.muted{color:#666;font-size:12px}.qr{border:1px solid #ddd;border-radius:8px;padding:8px;display:inline-block}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px}.muted{color:#666;font-size:12px}
 </style></head><body>
 <h1>Work Order — Direct Mix</h1>
-<div class="grid">
-  <div>
-    <table>
-      <tr><th style="width:160px">Batch ID</th><td>${batchId}</td></tr>
-      <tr><th>Volume</th><td><b>${vol}</b> L</td></tr>
-      <tr><th>Dose mode</th><td><b>${doseMode === "total" ? "Total g in tank" : "g/L"}</b></td></tr>
-      <tr><th>EC (est.)</th><td><b>${fx2(ecEstimate)}</b> mS/cm  ·  scale ${fx2(Number(ecScale)||1)}</td></tr>
-      ${num(ecTarget) ? `<tr><th>EC target</th><td>${fx2(num(ecTarget))} mS/cm (Δ ${fx2(ecDeltaToTarget)})</td></tr>` : ""}
-      ${num(ecMeasured) ? `<tr><th>EC measured</th><td>${fx2(num(ecMeasured))} mS/cm</td></tr>` : ""}
-    </table>
-  </div>
-  <div><div class="qr"><img src="${qrUrl}" width="160" height="160" alt="QR Recipe"/></div>
-  <div class="muted">QR contains the recipe JSON (batch, items, ppm, cost, EC fields).</div></div>
-</div>
+<table>
+  <tr><th style="width:160px">Batch ID</th><td>${batchId}</td></tr>
+  <tr><th>Volume</th><td><b>${vol}</b> L</td></tr>
+  <tr><th>Dose mode</th><td><b>${doseMode === "total" ? "Total in tank" : "per L"}</b> (${unitMass}${doseMode==="perL"?"/L":""})</td></tr>
+  <tr><th>EC (est.)</th><td><b>${fx2(ecEstimate)}</b> mS/cm · scale ${fx2(Number(ecScale)||1)}</td></tr>
+  ${num(ecTarget) ? `<tr><th>EC target</th><td>${fx2(num(ecTarget))} mS/cm (Δ ${fx2(ecDeltaToTarget)})</td></tr>` : ""}
+  ${num(ecMeasured) ? `<tr><th>EC measured</th><td>${fx2(num(ecMeasured))} mS/cm</td></tr>` : ""}
+  ${notes ? `<tr><th>Notes</th><td>${notes}</td></tr>` : ""}
+</table>
 
 <h2>Ingredients</h2>
-<table><thead><tr><th>#</th><th>Fertilizer</th><th>${doseMode === "total" ? "Grams (total)" : "g/L × Volume"}</th><th>Cost (RM)</th></tr></thead><tbody>
-${ingredients.map((r,i)=>{const f=getFert(r.fertId); if(!f) return ""; const price=Number(f.price_per_bag)||0; const bagKg=Number(f.bag_size_kg)||0;
-const totalG = doseMode==="total" ? num(r.gTotal) : num(r.gPerL)*vol; const cost = price>0&&bagKg>0 ? totalG*(price/(bagKg*1000)) : 0;
-return `<tr><td>${i+1}</td><td>${f.name}</td><td>${doseMode==="total"? totalG : `${num(r.gPerL)} × ${vol} = ${totalG}`} g</td><td>${fx2(cost)}</td></tr>`;}).join("")}
+<table><thead><tr><th>#</th><th>Fertilizer</th><th>${doseMode === "total" ? \`Weight (${unitMass})\` : \`\${unitPerL} × Volume = \${unitMass}\`}</th><th>Cost (RM)</th></tr></thead><tbody>
+${ingredients.map((r,i)=>{const f=getFert(r.fertId); if(!f) return "";
+const gramsTotal = doseMode==="total" ? num(r.gTotal)*unitFactor : num(r.gPerL)*unitFactor*vol;
+const displayTotal = gramsTotal / (weightUnit==="kg"?1000:1);
+const price=Number(f.price_per_bag)||0, bagKg=Number(f.bag_size_kg)||0;
+const cost = price>0&&bagKg>0 ? gramsTotal*(price/(bagKg*1000)) : 0;
+const rhs = doseMode==="total"
+  ? `${displayTotal} ${unitMass}`
+  : `${num(r.gPerL)} ${unitPerL} × ${vol} L = ${displayTotal} ${unitMass}`;
+return `<tr><td>${i+1}</td><td>${f.name}</td><td>${rhs}</td><td>${fx2(cost)}</td></tr>`;}).join("")}
 <tr><td colspan="3"><b>Total cost (RM)</b></td><td><b>${fx2(results.costRM)}</b></td></tr>
 </tbody></table>
 
@@ -300,25 +331,40 @@ return `<tr><td>${i+1}</td><td>${f.name}</td><td>${doseMode==="total"? totalG : 
         <Text style={[styles.label, { marginTop: 10 }]}>Dose mode</Text>
         <View style={styles.segment}>
           <Pressable onPress={() => setDoseMode("total")} style={[styles.segBtn, doseMode === "total" && styles.segActive]}>
-            <Text style={[styles.segText, doseMode === "total" && styles.segTextActive]}>Total g in tank</Text>
+            <Text style={[styles.segText, doseMode === "total" && styles.segTextActive]}>Total in tank</Text>
           </Pressable>
           <Pressable onPress={() => setDoseMode("perL")} style={[styles.segBtn, doseMode === "perL" && styles.segActive]}>
-            <Text style={[styles.segText, doseMode === "perL" && styles.segTextActive]}>g/L</Text>
+            <Text style={[styles.segText, doseMode === "perL" && styles.segTextActive]}>per L</Text>
           </Pressable>
         </View>
       </View>
 
       {/* Ingredients */}
       <View style={styles.card}>
-        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
           <Text style={styles.section}>Ingredients</Text>
-          <Pressable onPress={addRow} style={styles.addBtn}>
-            <Ionicons name="add" size={18} color="#fff" /><Text style={styles.addText}>Add</Text>
-          </Pressable>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <Text style={{ fontWeight: "600" }}>Units:</Text>
+            <View style={styles.segmentSm}>
+              <Pressable onPress={() => setWeightUnit("g")}  style={[styles.segBtnSm, weightUnit==="g"  && styles.segActive]}>
+                <Text style={[styles.segTextSm, weightUnit==="g"  && styles.segTextActive]}>g</Text>
+              </Pressable>
+              <Pressable onPress={() => setWeightUnit("kg")} style={[styles.segBtnSm, weightUnit==="kg" && styles.segActive]}>
+                <Text style={[styles.segTextSm, weightUnit==="kg" && styles.segTextActive]}>kg</Text>
+              </Pressable>
+            </View>
+            <Pressable onPress={addRow} style={styles.addBtn}>
+              <Ionicons name="add" size={18} color="#fff" /><Text style={styles.addText}>Add</Text>
+            </Pressable>
+          </View>
         </View>
-        {ingredients.length === 0 && <Text style={{ color: "#666", marginTop: 8 }}>Tap <Text style={{ fontWeight: "700" }}>Add</Text> to insert a fertilizer row.</Text>}
+
+        {ingredients.length === 0 && <Text style={{ color: "#666" }}>Tap <Text style={{ fontWeight: "700" }}>Add</Text> to insert a fertilizer row.</Text>}
         {ingredients.map((r, idx) => {
           const fert = getFert(r.fertId);
+          const label = doseMode === "total"
+            ? `Weight (${weightUnit})`
+            : `${weightUnit}/L`;
           return (
             <View key={r.key} style={styles.rowCard}>
               <View style={{ flex: 1 }}>
@@ -329,7 +375,7 @@ return `<tr><td>${i+1}</td><td>${f.name}</td><td>${doseMode==="total"? totalG : 
               </View>
               <View style={{ width: 10 }} />
               <View style={{ width: 160 }}>
-                <Text style={styles.smallLabel}>{doseMode === "total" ? "Grams (total)" : "g/L"}</Text>
+                <Text style={styles.smallLabel}>{label}</Text>
                 <TextInput
                   value={doseMode === "total" ? r.gTotal : r.gPerL}
                   onChangeText={(t) => setIngredients((prev) => prev.map((row, i) =>
@@ -350,8 +396,7 @@ return `<tr><td>${i+1}</td><td>${f.name}</td><td>${doseMode==="total"? totalG : 
         <Text style={styles.section}>Totals at dripper (ppm)</Text>
         {loading ? <ActivityIndicator /> : (
           <>
-            {/* Macros */}
-            <View style={styles.grid}>
+            <View className="macros" style={styles.grid}>
               <Box label="N" value={results.ppm.N} dp={0} />
               <Box label="P₂O₅" value={results.ppm.P2O5} dp={0} />
               <Box label="K₂O" value={results.ppm.K2O} dp={0} />
@@ -360,7 +405,6 @@ return `<tr><td>${i+1}</td><td>${f.name}</td><td>${doseMode==="total"? totalG : 
               <Box label="S" value={results.ppm.S} dp={0} />
             </View>
 
-            {/* Micros */}
             <Text style={[styles.section, { marginTop: 12 }]}>Micros (ppm)</Text>
             <View style={styles.grid}>
               <Box label="Fe" value={results.ppm.Fe} dp={2} />
@@ -372,34 +416,16 @@ return `<tr><td>${i+1}</td><td>${f.name}</td><td>${doseMode==="total"? totalG : 
               <Box label="Total cost (RM)" value={results.costRM} dp={2} />
             </View>
 
-            {/* EC Readout */}
             <Text style={[styles.section, { marginTop: 12 }]}>EC</Text>
             <View style={styles.grid}>
               <Box label="EC est. (mS/cm)" value={ecEstimate} dp={2} />
             </View>
             <View style={{ marginTop: 8, gap: 8 }}>
-              <LabeledInput
-                label="EC scale (multiplier)"
-                value={ecScale}
-                onChangeText={setEcScale}
-                keyboardType="decimal-pad"
-              />
-              <LabeledInput
-                label="Target EC (mS/cm) — optional"
-                value={ecTarget}
-                onChangeText={setEcTarget}
-                keyboardType="decimal-pad"
-              />
-              <LabeledInput
-                label="Measured EC (mS/cm) — optional"
-                value={ecMeasured}
-                onChangeText={setEcMeasured}
-                keyboardType="decimal-pad"
-              />
+              <LabeledInput label="EC scale (multiplier)" value={ecScale} onChangeText={setEcScale} keyboardType="decimal-pad" />
+              <LabeledInput label="Target EC (optional, mS/cm)" value={ecTarget} onChangeText={setEcTarget} keyboardType="decimal-pad" />
+              <LabeledInput label="Measured EC (optional, mS/cm)" value={ecMeasured} onChangeText={setEcMeasured} keyboardType="decimal-pad" />
               {!!num(ecTarget) && (
-                <Text style={{ color: "#333" }}>
-                  Δ to target: <Text style={{ fontWeight: "700" }}>{(ecDeltaToTarget).toFixed(2)}</Text> mS/cm
-                </Text>
+                <Text>Δ to target: <Text style={{ fontWeight: "700" }}>{(ecDeltaToTarget).toFixed(2)}</Text> mS/cm</Text>
               )}
             </View>
           </>
@@ -467,6 +493,9 @@ const styles = StyleSheet.create({
   segment: { flexDirection: "row", borderWidth: 1, borderColor: "#ddd", borderRadius: 10, overflow: "hidden", marginTop: 6 },
   segBtn: { paddingHorizontal: 12, height: 36, alignItems: "center", justifyContent: "center" },
   segActive: { backgroundColor: "#222" }, segText: { color: "#222", fontWeight: "600" }, segTextActive: { color: "#fff" },
+  segmentSm: { flexDirection: "row", borderWidth: 1, borderColor: "#ddd", borderRadius: 10, overflow: "hidden" },
+  segBtnSm: { paddingHorizontal: 12, height: 32, alignItems: "center", justifyContent: "center" },
+  segTextSm: { color: "#222", fontWeight: "600" },
   section: { fontSize: 16, fontWeight: "700" },
   addBtn: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "#222", paddingHorizontal: 12, height: 40, borderRadius: 10 },
   addText: { color: "#fff", fontWeight: "700" },
