@@ -1,7 +1,8 @@
-// MixDirectScreen.js — DIRECT solution mixer connected to Supabase
+// MixDirectScreen.js — DIRECT solution mixer (Supabase) with MACROS + MICROS
 // - Pulls fertilizers from DB (shared or owned)
 // - Dose modes: "Total g in tank" (default) or "g/L"
 // - Correct ppm math (Mg shown as ELEMENTAL; auto-convert MgO→Mg when name mentions "MgO")
+// - Totals now include Fe, Mn, Zn, Cu, B, Mo (ppm)
 // - Cost = total grams actually added × (price_per_bag / (bag_size_kg * 1000))
 // - Simple searchable picker + printable summary
 
@@ -16,7 +17,6 @@ import {
   Text,
   TextInput,
   View,
-  Platform,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "./supabaseClient";
@@ -40,7 +40,6 @@ export default function MixDirectScreen() {
   const loadFerts = useCallback(async () => {
     try {
       setLoading(true);
-      // Read rows visible via RLS (our policy allows shared=true or owner=me)
       const { data, error } = await supabase
         .from("fertilizers")
         .select("id,name,bag_size_kg,price_per_bag,npk,micro,shared,owner")
@@ -109,6 +108,14 @@ export default function MixDirectScreen() {
       Mg_ppm = 0, // ELEMENTAL Mg
       S_ppm = 0;
 
+    // micros
+    let Fe_ppm = 0,
+      Mn_ppm = 0,
+      Zn_ppm = 0,
+      Cu_ppm = 0,
+      B_ppm = 0,
+      Mo_ppm = 0;
+
     let costRM = 0;
 
     for (const row of ingredients) {
@@ -116,6 +123,7 @@ export default function MixDirectScreen() {
       if (!fert) continue;
 
       const npk = fert.npk || {};
+      const micro = fert.micro || {};
       const name = fert.name || "";
 
       // grams per liter from user entry + mode
@@ -129,21 +137,27 @@ export default function MixDirectScreen() {
       // Percent helpers (null/undefined => 0)
       const pct = (v) => (v == null || v === "" ? 0 : Number(v));
 
-      // Mg handling: store as ELEMENTAL Mg if possible.
-      // If the product name contains "MgO" and a Mg number is present,
-      // we assume that number is MgO% and convert to Mg elemental.
+      // Mg handling: store/show as ELEMENTAL Mg.
       let Mg_percent = pct(npk.Mg);
       if (Mg_percent > 0 && /MgO/i.test(name)) {
         Mg_percent = Mg_percent * MgO_TO_Mg;
       }
 
-      // ppm contribution from this ingredient
-      N_ppm += gPerL * pct(npk.N) * 10; // g/L * % * 1000; (% = value/100, so 1000/100 = 10)
+      // macros ppm
+      N_ppm += gPerL * pct(npk.N) * 10;
       P2O5_ppm += gPerL * pct(npk.P2O5) * 10;
       K2O_ppm += gPerL * pct(npk.K2O) * 10;
       Ca_ppm += gPerL * pct(npk.Ca) * 10;
       Mg_ppm += gPerL * Mg_percent * 10;
       S_ppm += gPerL * pct(npk.S) * 10;
+
+      // micros ppm (percent → ppm via ×10)
+      Fe_ppm += gPerL * pct(micro.Fe) * 10;
+      Mn_ppm += gPerL * pct(micro.Mn) * 10;
+      Zn_ppm += gPerL * pct(micro.Zn) * 10;
+      Cu_ppm += gPerL * pct(micro.Cu) * 10;
+      B_ppm += gPerL * pct(micro.B) * 10;
+      Mo_ppm += gPerL * pct(micro.Mo) * 10;
 
       // Cost
       const price = Number(fert.price_per_bag) || 0;
@@ -156,26 +170,29 @@ export default function MixDirectScreen() {
     }
 
     return {
-      ppm: { N: N_ppm, P2O5: P2O5_ppm, K2O: K2O_ppm, Ca: Ca_ppm, Mg: Mg_ppm, S: S_ppm },
+      ppm: {
+        N: N_ppm,
+        P2O5: P2O5_ppm,
+        K2O: K2O_ppm,
+        Ca: Ca_ppm,
+        Mg: Mg_ppm,
+        S: S_ppm,
+        Fe: Fe_ppm,
+        Mn: Mn_ppm,
+        Zn: Zn_ppm,
+        Cu: Cu_ppm,
+        B: B_ppm,
+        Mo: Mo_ppm,
+      },
       costRM,
     };
   }, [ingredients, ferts, doseMode, vol]);
 
-  // Simple validations/warnings
-  const warnings = useMemo(() => {
-    const w = [];
-    if (doseMode === "total" && vol === 0) w.push("Volume is 0 — enter tank volume in liters.");
-    if (results.ppm.N > 1500)
-      w.push(
-        "N > 1500 ppm — looks like a stock solution. Did you mean 'Total g in tank' rather than g/L?"
-      );
-    return w;
-  }, [results, doseMode, vol]);
-
   // Print view
   const onPrint = () => {
-    const fmt = (x) =>
-      Number.isFinite(x) ? Math.round(x) : 0;
+    const round0 = (x) => (Number.isFinite(x) ? Math.round(x) : 0);
+    const fixed2 = (x) => (Number.isFinite(x) ? x.toFixed(2) : "0.00");
+
     const html = `
 <!doctype html>
 <html>
@@ -216,7 +233,7 @@ export default function MixDirectScreen() {
             <td>${i + 1}</td>
             <td>${fert.name}</td>
             <td>${doseMode === "total" ? (r.gTotal || 0) : (r.gPerL || 0)}</td>
-            <td>${cost.toFixed(2)}</td>
+            <td>${fixed2(cost)}</td>
           </tr>`;
         })
         .join("")}
@@ -226,13 +243,19 @@ export default function MixDirectScreen() {
   <table>
     <thead><tr><th>Target</th><th>ppm</th></tr></thead>
     <tbody>
-      <tr><td>N</td><td>${fmt(results.ppm.N)}</td></tr>
-      <tr><td>P₂O₅</td><td>${fmt(results.ppm.P2O5)}</td></tr>
-      <tr><td>K₂O</td><td>${fmt(results.ppm.K2O)}</td></tr>
-      <tr><td>Ca</td><td>${fmt(results.ppm.Ca)}</td></tr>
-      <tr><td>Mg (elemental)</td><td>${fmt(results.ppm.Mg)}</td></tr>
-      <tr><td>S</td><td>${fmt(results.ppm.S)}</td></tr>
-      <tr class="tot"><td>Total cost (RM)</td><td>${results.costRM.toFixed(2)}</td></tr>
+      <tr><td>N</td><td>${round0(results.ppm.N)}</td></tr>
+      <tr><td>P₂O₅</td><td>${round0(results.ppm.P2O5)}</td></tr>
+      <tr><td>K₂O</td><td>${round0(results.ppm.K2O)}</td></tr>
+      <tr><td>Ca</td><td>${round0(results.ppm.Ca)}</td></tr>
+      <tr><td>Mg (elemental)</td><td>${round0(results.ppm.Mg)}</td></tr>
+      <tr><td>S</td><td>${round0(results.ppm.S)}</td></tr>
+      <tr><td>Fe</td><td>${round0(results.ppm.Fe)}</td></tr>
+      <tr><td>Mn</td><td>${round0(results.ppm.Mn)}</td></tr>
+      <tr><td>Zn</td><td>${round0(results.ppm.Zn)}</td></tr>
+      <tr><td>Cu</td><td>${round0(results.ppm.Cu)}</td></tr>
+      <tr><td>B</td><td>${round0(results.ppm.B)}</td></tr>
+      <tr><td>Mo</td><td>${round0(results.ppm.Mo)}</td></tr>
+      <tr class="tot"><td>Total cost (RM)</td><td>${fixed2(results.costRM)}</td></tr>
     </tbody>
   </table>
 
@@ -351,21 +374,29 @@ export default function MixDirectScreen() {
         {loading ? (
           <ActivityIndicator />
         ) : (
-          <View style={styles.grid}>
-            <Box label="N" value={results.ppm.N} />
-            <Box label="P₂O₅" value={results.ppm.P2O5} />
-            <Box label="K₂O" value={results.ppm.K2O} />
-            <Box label="Ca" value={results.ppm.Ca} />
-            <Box label="Mg (elemental)" value={results.ppm.Mg} />
-            <Box label="S" value={results.ppm.S} />
-            <Box label="Total cost (RM)" value={results.costRM} fixed2 />
-          </View>
+          <>
+            <View style={styles.grid}>
+              {/* Macros */}
+              <Box label="N" value={results.ppm.N} />
+              <Box label="P₂O₅" value={results.ppm.P2O5} />
+              <Box label="K₂O" value={results.ppm.K2O} />
+              <Box label="Ca" value={results.ppm.Ca} />
+              <Box label="Mg (elemental)" value={results.ppm.Mg} />
+              <Box label="S" value={results.ppm.S} />
+            </View>
+
+            <Text style={[styles.section, { marginTop: 12 }]}>Micros (ppm)</Text>
+            <View style={styles.grid}>
+              <Box label="Fe" value={results.ppm.Fe} />
+              <Box label="Mn" value={results.ppm.Mn} />
+              <Box label="Zn" value={results.ppm.Zn} />
+              <Box label="Cu" value={results.ppm.Cu} />
+              <Box label="B" value={results.ppm.B} />
+              <Box label="Mo" value={results.ppm.Mo} />
+              <Box label="Total cost (RM)" value={results.costRM} fixed2 />
+            </View>
+          </>
         )}
-        {warnings.map((w, i) => (
-          <Text key={i} style={{ color: "#b00020", marginTop: 6 }}>
-            {w}
-          </Text>
-        ))}
       </View>
 
       <Pressable onPress={onPrint} style={styles.printBtn}>
@@ -427,7 +458,6 @@ export default function MixDirectScreen() {
   );
 }
 
-// Small box UI
 function Box({ label, value, fixed2 = false }) {
   const v = Number(value);
   const text =
