@@ -414,4 +414,238 @@ export default function MixDirectScreen() {
       <View style={styles.card}>
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
           <Text style={styles.section}>Ingredients</Text>
-          <Pressable onPress={addRow} style={styles.addBtn
+          <Pressable onPress={addRow} style={styles.addBtn}>
+            <Ionicons name="add" size={18} color="#fff" />
+            <Text style={styles.addText}>Add</Text>
+          </Pressable>
+        </View>
+
+        {ingredients.length === 0 && (
+          <Text style={{ color: "#666", marginTop: 8 }}>
+            Tap <Text style={{ fontWeight: "700" }}>Add</Text> to insert a fertilizer row.
+          </Text>
+        )}
+
+        {ingredients.map((r, idx) => {
+          const fert = getFert(r.fertId);
+          return (
+            <View key={r.key} style={styles.rowCard}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.smallLabel}>Fertilizer</Text>
+                <Pressable
+                  onPress={() => openPicker(idx)}
+                  style={[styles.input, { minHeight: 44, justifyContent: "center" }]}
+                >
+                  <Text numberOfLines={2}>
+                    {fert ? fert.name : "Select a fertilizer…"}
+                  </Text>
+                </Pressable>
+              </View>
+              <View style={{ width: 10 }} />
+              <View style={{ width: 160 }}>
+                <Text style={styles.smallLabel}>
+                  {doseMode === "total" ? "Grams (total)" : "g/L"}
+                </Text>
+                <TextInput
+                  value={doseMode === "total" ? r.gTotal : r.gPerL}
+                  onChangeText={(t) =>
+                    setIngredients((prev) =>
+                      prev.map((row, i) =>
+                        i === idx
+                          ? doseMode === "total"
+                            ? { ...row, gTotal: t }
+                            : { ...row, gPerL: t }
+                          : row
+                      )
+                    )
+                  }
+                  keyboardType="decimal-pad"
+                  placeholder="0"
+                  style={styles.input}
+                />
+              </View>
+
+              <Pressable onPress={() => removeRow(r.key)} style={styles.trashBtn}>
+                <Ionicons name="trash-outline" size={18} color="#c00" />
+              </Pressable>
+            </View>
+          );
+        })}
+      </View>
+
+      {/* Totals */}
+      <View style={styles.card}>
+        <Text style={styles.section}>Totals at dripper (ppm)</Text>
+        {loading ? (
+          <ActivityIndicator />
+        ) : (
+          <>
+            {/* Macros (0 dp) */}
+            <View style={styles.grid}>
+              <Box label="N" value={results.ppm.N} dp={0} />
+              <Box label="P₂O₅" value={results.ppm.P2O5} dp={0} />
+              <Box label="K₂O" value={results.ppm.K2O} dp={0} />
+              <Box label="Ca" value={results.ppm.Ca} dp={0} />
+              <Box label="Mg (elemental)" value={results.ppm.Mg} dp={0} />
+              <Box label="S" value={results.ppm.S} dp={0} />
+            </View>
+
+            {/* Micros (2 dp) */}
+            <Text style={[styles.section, { marginTop: 12 }]}>Micros (ppm)</Text>
+            <View style={styles.grid}>
+              <Box label="Fe" value={results.ppm.Fe} dp={2} />
+              <Box label="Mn" value={results.ppm.Mn} dp={2} />
+              <Box label="Zn" value={results.ppm.Zn} dp={2} />
+              <Box label="Cu" value={results.ppm.Cu} dp={2} />
+              <Box label="B" value={results.ppm.B} dp={2} />
+              <Box label="Mo" value={results.ppm.Mo} dp={2} />
+              <Box label="Total cost (RM)" value={results.costRM} dp={2} />
+            </View>
+          </>
+        )}
+      </View>
+
+      <Pressable onPress={onPrintWorkOrder} style={styles.printBtn}>
+        <Ionicons name="print-outline" size={18} color="#fff" />
+        <Text style={styles.printText}>Print Work Order</Text>
+      </Pressable>
+
+      {/* Picker modal */}
+      <Modal visible={pickerOpen} animationType="slide" transparent>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Select fertilizer</Text>
+            <TextInput
+              value={pickerFilter}
+              onChangeText={setPickerFilter}
+              placeholder="Search…"
+              style={styles.input}
+              autoFocus
+            />
+            <ScrollView style={{ maxHeight: 360, marginTop: 8 }}>
+              {ferts
+                .filter((f) =>
+                  (f.name || "")
+                    .toLowerCase()
+                    .includes(pickerFilter.trim().toLowerCase())
+                )
+                .map((f) => (
+                  <Pressable
+                    key={f.id}
+                    onPress={() => selectFert(pickerIndex, f)}
+                    style={styles.pickRow}
+                  >
+                    <Ionicons name="leaf-outline" size={18} style={{ marginRight: 8 }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontWeight: "600" }}>{f.name}</Text>
+                      <Text style={{ color: "#666", fontSize: 12 }}>
+                        {f.bag_size_kg ? `${f.bag_size_kg} kg` : "—"} ·{" "}
+                        {f.price_per_bag ? `RM ${f.price_per_bag}` : "no price"}
+                      </Text>
+                    </View>
+                  </Pressable>
+                ))}
+              {ferts.length === 0 && (
+                <Text style={{ color: "#666" }}>
+                  No fertilizers. Add some in the Fertilizer List tab.
+                </Text>
+              )}
+            </ScrollView>
+
+            <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 10, marginTop: 10 }}>
+              <Pressable onPress={() => setPickerOpen(false)} style={[styles.pillBtn, { backgroundColor: "#eee" }]}>
+                <Text>Close</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </ScrollView>
+  );
+}
+
+// Small helpers
+function LabeledInput({ label, style, ...rest }) {
+  return (
+    <View>
+      <Text style={styles.smallLabel}>{label}</Text>
+      <TextInput {...rest} style={[styles.input, style]} />
+    </View>
+  );
+}
+
+// Small box UI — dp = number of decimals (0 for macros, 2 for micros & cost)
+function Box({ label, value, dp = 0 }) {
+  const v = Number(value);
+  const text = Number.isFinite(v) ? v.toFixed(dp) : (0).toFixed(dp);
+  return (
+    <View style={styles.box}>
+      <Text style={styles.boxLabel}>{label}</Text>
+      <Text style={styles.boxValue}>{text}</Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: "#fff", padding: 16 },
+  title: { fontSize: 22, fontWeight: "700", textAlign: "center", marginBottom: 8 },
+
+  card: {
+    borderWidth: 1, borderColor: "#eee", borderRadius: 12,
+    padding: 12, marginBottom: 12, backgroundColor: "#fff",
+  },
+
+  label: { fontWeight: "600", marginBottom: 6 },
+  smallLabel: { color: "#555", marginBottom: 6, fontSize: 13 },
+
+  input: {
+    borderWidth: 1, borderColor: "#ddd", borderRadius: 10,
+    minHeight: 44, paddingHorizontal: 12, backgroundColor: "#fff",
+  },
+
+  segment: {
+    flexDirection: "row", borderWidth: 1, borderColor: "#ddd",
+    borderRadius: 10, overflow: "hidden", marginTop: 6,
+  },
+  segBtn: { paddingHorizontal: 12, height: 36, alignItems: "center", justifyContent: "center" },
+  segActive: { backgroundColor: "#222" },
+  segText: { color: "#222", fontWeight: "600" },
+  segTextActive: { color: "#fff" },
+
+  section: { fontSize: 16, fontWeight: "700" },
+
+  addBtn: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    backgroundColor: "#222", paddingHorizontal: 12, height: 40, borderRadius: 10,
+  },
+  addText: { color: "#fff", fontWeight: "700" },
+
+  rowCard: {
+    marginTop: 10, borderWidth: 1, borderColor: "#eee", borderRadius: 10, padding: 10,
+    flexDirection: "row", alignItems: "flex-end",
+  },
+  trashBtn: {
+    marginLeft: 10, height: 40, width: 40, borderRadius: 10,
+    alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#eee",
+  },
+
+  grid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },
+  box: { width: "31%", minWidth: 150, borderWidth: 1, borderColor: "#eee", borderRadius: 10, padding: 10 },
+  boxLabel: { color: "#666", fontSize: 12 },
+  boxValue: { fontSize: 18, fontWeight: "700" },
+
+  printBtn: {
+    marginTop: 8, backgroundColor: "#222", height: 46,
+    borderRadius: 10, alignItems: "center", justifyContent: "center",
+    flexDirection: "row", gap: 8,
+  },
+  printText: { color: "#fff", fontWeight: "700" },
+
+  modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.3)", justifyContent: "center", padding: 20 },
+  modalCard: { backgroundColor: "#fff", borderRadius: 14, padding: 16 },
+  modalTitle: { fontSize: 18, fontWeight: "700", marginBottom: 8 },
+  pickRow: {
+    flexDirection: "row", alignItems: "center",
+    paddingVertical: 8, paddingHorizontal: 6, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: "#eee",
+  },
+});
