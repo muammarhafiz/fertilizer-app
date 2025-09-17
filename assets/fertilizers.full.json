@@ -1,0 +1,116 @@
+[
+  {
+    "name": "YaraTera Calcinit (15.5-0-0 + 19 Ca)",
+    "bagSizeKg": 25,
+    "pricePerBag": 55,
+    "npk": { "N": 15.5, "P2O5": "", "K2O": "", "Ca": 19, "Mg": "", "S": "" }
+  },
+  {
+    "name": "Yara FertiCare Vegetables (7-10-30 + MgO + TE)",
+    "bagSizeKg": 25,
+    "pricePerBag": "",
+    "npk": { "N": 7, "P2O5": 10, "K2O": 30, "Ca": "", "Mg": 7, "S": 14 }
+  },
+  {
+    "name": "YaraMila 15-9-20 +2MgO +4S +TE",
+    "bagSizeKg": 25,
+    "pricePerBag": "",
+    "npk": { "N": 15, "P2O5": 9, "K2O": 20, "Ca": "", "Mg": 2, "S": 4 }
+  },
+  {
+    "name": "YaraLiva Nitrabor (CaN + B)",
+    "bagSizeKg": 25,
+    "pricePerBag": "",
+    "npk": { "N": 15.4, "P2O5": "", "K2O": "", "Ca": 18.3, "Mg": "", "S": "" }
+  },
+  {
+    "name": "Kristalon 12-12-36 + TE",
+    "bagSizeKg": 25,
+    "pricePerBag": "",
+    "npk": { "N": 12, "P2O5": 12, "K2O": 36, "Ca": "", "Mg": "", "S": "" }
+  },
+  {
+    "name": "Kristalon Orange (6-12-36 + 3 MgO + 8 S + TE)",
+    "bagSizeKg": 25,
+    "pricePerBag": "",
+    "npk": { "N": 6, "P2O5": 12, "K2O": 36, "Ca": "", "Mg": 3, "S": 8 }
+  },
+  {
+    "name": "YaraTera Krista K Plus (Potassium Nitrate)",
+    "bagSizeKg": 25,
+    "pricePerBag": 170,
+    "npk": { "N": "", "P2O5": "", "K2O": "", "Ca": "", "Mg": "", "S": "" }
+  },
+  {
+    "name": "YaraTera SOP (Potassium Sulphate)",
+    "bagSizeKg": 25,
+    "pricePerBag": 128,
+    "npk": { "N": "", "P2O5": "", "K2O": "", "Ca": "", "Mg": "", "S": "" }
+  },
+  {
+    "name": "YaraTera MKP (Mono Potassium Phosphate)",
+    "bagSizeKg": 25,
+    "pricePerBag": 255,
+    "npk": { "N": "", "P2O5": "", "K2O": "", "Ca": "", "Mg": "", "S": "" }
+  },
+  {
+    "name": "YaraTera Krista MgS (Magnesium Sulphate)",
+    "bagSizeKg": 25,
+    "pricePerBag": 35,
+    "npk": { "N": "", "P2O5": "", "K2O": "", "Ca": "", "Mg": "", "S": "" }
+  },
+  {
+    "name": "AG ABC (EDTA Micronutrient Mix)",
+    "bagSizeKg": 1,
+    "pricePerBag": 52,
+    "npk": { "N": "", "P2O5": "", "K2O": "", "Ca": "", "Mg": "", "S": "" }
+  },
+  {
+    "name": "AG HiBor (Sodium Borate)",
+    "bagSizeKg": 1,
+    "pricePerBag": 40,
+    "npk": { "N": "", "P2O5": "", "K2O": "", "Ca": "", "Mg": "", "S": "" }
+  },
+  {
+    "name": "AG Fe (EDTA)",
+    "bagSizeKg": 1,
+    "pricePerBag": 45,
+    "npk": { "N": "", "P2O5": "", "K2O": "", "Ca": "", "Mg": "", "S": "" }
+  },
+  {
+    "name": "AG Zn (EDTA)",
+    "bagSizeKg": 1,
+    "pricePerBag": 45,
+    "npk": { "N": "", "P2O5": "", "K2O": "", "Ca": "", "Mg": "", "S": "" }
+  },
+  {
+    "name": "AG Mn (EDTA)",
+    "bagSizeKg": 1,
+    "pricePerBag": 45,
+    "npk": { "N": "", "P2O5": "", "K2O": "", "Ca": "", "Mg": "", "S": "" }
+  },
+  {
+    "name": "AG Cu (EDTA)",
+    "bagSizeKg": 1,
+    "pricePerBag": 54,
+    "npk": { "N": "", "P2O5": "", "K2O": "", "Ca": "", "Mg": "", "S": "" }
+  },
+  {
+    "name": "AG Ammonium Molybdate",
+    "bagSizeKg": 0.5,
+    "pricePerBag": 159,
+    "npk": { "N": "", "P2O5": "", "K2O": "", "Ca": "", "Mg": "", "S": "" }
+  },
+  {
+    "name": "Ag Magnesium (MgSO4·7H2O)",
+    "bagSizeKg": 25,
+    "pricePerBag": 29,
+    "npk": { "N": "", "P2O5": "", "K2O": "", "Ca": "", "Mg": 9.7, "S": 13 }
+  },
+  {
+    "name": "Yinong Ammonium Nitrate (34% N)",
+    "bagSizeKg": 25,
+    "pricePerBag": "",
+    "npk": { "N": 34, "P2O5": "", "K2O": "", "Ca": "", "Mg": "", "S": "" }
+  }
+]
