@@ -1,4 +1,4 @@
-// FertilizerListScreen.js — Supabase + header Sign-out + price/bag subtitle
+// FertilizerListScreen.js — Supabase + header Sign-out + Import JSON (drop-in)
 
 import React, {
   useCallback,
@@ -21,13 +21,7 @@ import {
 import { Swipeable } from "react-native-gesture-handler";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "./supabaseClient";
-
-function formatRM(v) {
-  if (v === null || v === undefined || v === "") return null;
-  const n = Number(v);
-  if (!Number.isFinite(n)) return null;
-  return `RM ${n.toFixed(2)}`;
-}
+import seeds from "./fertilizers.full.json"; // <-- your JSON
 
 export default function FertilizerListScreen({ navigation }) {
   const [items, setItems] = useState([]);
@@ -37,31 +31,41 @@ export default function FertilizerListScreen({ navigation }) {
   const [query, setQuery] = useState("");
   const [newName, setNewName] = useState("");
 
-  const [editing, setEditing] = useState(null); // row being edited
+  const [editing, setEditing] = useState(null);
   const [editText, setEditText] = useState("");
 
-  // ── header: Sign-out button ────────────────────────────────────────────────
+  // Header buttons: Import + Sign-out
   useLayoutEffect(() => {
     navigation.setOptions({
-      headerRight: () => (
-        <Pressable
-          onPress={async () => {
-            try {
-              await supabase.auth.signOut();
-            } catch {}
-          }}
-          style={{ paddingHorizontal: 8 }}
-          accessibilityLabel="Sign out"
-          title="Sign out"
-        >
-          <Ionicons name="log-out-outline" size={22} />
-        </Pressable>
-      ),
       title: "Fertilizer List",
+      headerRight: () => (
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <Pressable
+            onPress={bulkImportFromJson}
+            style={{ paddingHorizontal: 8 }}
+            accessibilityLabel="Import from JSON"
+            title="Import"
+          >
+            <Ionicons name="cloud-upload-outline" size={22} />
+          </Pressable>
+          <Pressable
+            onPress={async () => {
+              try {
+                await supabase.auth.signOut();
+              } catch {}
+            }}
+            style={{ paddingHorizontal: 8 }}
+            accessibilityLabel="Sign out"
+            title="Sign out"
+          >
+            <Ionicons name="log-out-outline" size={22} />
+          </Pressable>
+        </View>
+      ),
     });
   }, [navigation]);
 
-  // ── load list ──────────────────────────────────────────────────────────────
+  // Load list
   const fetchList = useCallback(async () => {
     try {
       setLoading(true);
@@ -92,7 +96,77 @@ export default function FertilizerListScreen({ navigation }) {
     }
   }, [fetchList]);
 
-  // ── CRUD ───────────────────────────────────────────────────────────────────
+  // Helpers
+  const toNum = (v) =>
+    v === null || v === undefined || v === "" ? null : Number(v);
+
+  // Bulk import
+  const bulkImportFromJson = async () => {
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const user = userData?.user;
+      if (!user) {
+        Alert.alert("Not signed in", "Please sign in first.");
+        return;
+      }
+
+      // Get existing names to avoid duplicates
+      const { data: existing, error: selErr } = await supabase
+        .from("fertilizers")
+        .select("name");
+      if (selErr) throw selErr;
+      const existingNames = new Set((existing ?? []).map((x) => x.name?.trim()?.toLowerCase()));
+
+      // Build rows to insert (skip names that already exist)
+      const rows = [];
+      for (const f of seeds) {
+        const nm = (f.name ?? "").trim();
+        if (!nm) continue;
+        if (existingNames.has(nm.toLowerCase())) continue;
+
+        const npk = f.npk || {};
+        const micro = f.micro || {};
+        rows.push({
+          owner: user.id,
+          name: nm,
+          bag_size_kg: toNum(f.bagSizeKg),
+          price_per_bag: toNum(f.pricePerBag),
+          npk: {
+            N: toNum(npk.N),
+            P2O5: toNum(npk.P2O5),
+            K2O: toNum(npk.K2O),
+            Ca: toNum(npk.Ca),
+            Mg: toNum(npk.Mg),
+            S: toNum(npk.S),
+          },
+          micro: {
+            Fe: toNum(micro.Fe),
+            Mn: toNum(micro.Mn),
+            Zn: toNum(micro.Zn),
+            Cu: toNum(micro.Cu),
+            B: toNum(micro.B),
+            Mo: toNum(micro.Mo),
+          },
+        });
+      }
+
+      if (rows.length === 0) {
+        Alert.alert("Import", "Nothing to import (all names already exist).");
+        return;
+      }
+
+      const { error: insErr } = await supabase.from("fertilizers").insert(rows);
+      if (insErr) throw insErr;
+
+      Alert.alert("Import", `Imported ${rows.length} fertilizers.`);
+      fetchList();
+    } catch (e) {
+      console.warn("import error", e);
+      Alert.alert("Import error", e.message ?? String(e));
+    }
+  };
+
+  // CRUD
   const addItem = async () => {
     const name = newName.trim();
     if (!name) return;
@@ -113,8 +187,8 @@ export default function FertilizerListScreen({ navigation }) {
             name,
             bag_size_kg: null,
             price_per_bag: null,
-            npk: { N: "", P2O5: "", K2O: "", Ca: "", Mg: "", S: "" },
-            micro: { Fe: "", Mn: "", Zn: "", Cu: "", B: "", Mo: "" },
+            npk: { N: null, P2O5: null, K2O: null, Ca: null, Mg: null, S: null },
+            micro: { Fe: null, Mn: null, Zn: null, Cu: null, B: null, Mo: null },
           },
         ])
         .select()
@@ -163,10 +237,7 @@ export default function FertilizerListScreen({ navigation }) {
         style: "destructive",
         onPress: async () => {
           try {
-            const { error } = await supabase
-              .from("fertilizers")
-              .delete()
-              .eq("id", id);
+            const { error } = await supabase.from("fertilizers").delete().eq("id", id);
             if (error) throw error;
             setItems((prev) => prev.filter((it) => it.id !== id));
           } catch (e) {
@@ -178,14 +249,14 @@ export default function FertilizerListScreen({ navigation }) {
     ]);
   };
 
-  // ── filter ─────────────────────────────────────────────────────────────────
+  // Filter
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return items;
     return items.filter((it) => (it.name ?? "").toLowerCase().includes(q));
   }, [items, query]);
 
-  // ── row renderer ───────────────────────────────────────────────────────────
+  // Row renderer
   const renderRow = ({ item }) => {
     const Right = () => (
       <View style={styles.actions}>
@@ -200,14 +271,6 @@ export default function FertilizerListScreen({ navigation }) {
       </View>
     );
 
-    const price = formatRM(item.price_per_bag);
-    const size = item.bag_size_kg ?? "";
-    const subtitle =
-      price && size ? `${price} / ${size} kg`
-      : price ? `${price}`
-      : size ? `${size} kg`
-      : "Tap to add details";
-
     return (
       <Swipeable renderRightActions={Right} overshootRight={false}>
         <Pressable
@@ -219,21 +282,18 @@ export default function FertilizerListScreen({ navigation }) {
           }
         >
           <View style={styles.card}>
-            <Ionicons name="leaf-outline" size={20} style={{ marginRight: 10 }} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.name} numberOfLines={2}>
-                {item.name || "(no name)"}
-              </Text>
-              <Text style={styles.subtitle} numberOfLines={1}>{subtitle}</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} />
+            <Ionicons name="leaf-outline" size={18} style={{ marginRight: 8 }} />
+            <Text style={styles.name} numberOfLines={2}>
+              {item.name || "(no name)"}
+            </Text>
+            <Ionicons name="chevron-forward" size={18} />
           </View>
         </Pressable>
       </Swipeable>
     );
   };
 
-  // ── UI ─────────────────────────────────────────────────────────────────────
+  // UI
   return (
     <View style={styles.container}>
       {/* search */}
@@ -321,7 +381,6 @@ export default function FertilizerListScreen({ navigation }) {
   );
 }
 
-// ── styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 16, backgroundColor: "#fff" },
   row: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 12 },
@@ -353,8 +412,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     backgroundColor: "#fff",
   },
-  name: { fontSize: 16, fontWeight: "600" },
-  subtitle: { fontSize: 12, color: "#6b7280" },
+  name: { flex: 1, fontSize: 16 },
   actions: {
     flexDirection: "row",
     alignItems: "center",
