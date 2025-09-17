@@ -1,67 +1,51 @@
-// App.js (root of your project)
-import "react-native-gesture-handler";
-import * as React from "react";
-import { GestureHandlerRootView } from "react-native-gesture-handler";
+// App.js — Tabs: Mix, Fertilizers, Saved. Stack contains FertilizerDetail.
+
+import React from "react";
 import { NavigationContainer } from "@react-navigation/native";
-import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Ionicons } from "@expo/vector-icons";
 
-import AuthGate from "./AuthGate"; // ← the sign-in screen wrapper
-import FertilizerListScreen from "./FertilizerListScreen";
-import FertilizerDetailScreen from "./FertilizerDetailScreen";
+import AuthGate from "./AuthGate";
 import MixDirectScreen from "./MixDirectScreen";
+import FertilizerListScreen from "./FertilizerListScreen";
+import FertilizerDetailScreen from "./FertilizerDetailScreen"; // you already have this
+import SavedRecipesScreen from "./SavedRecipesScreen";
 
-const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
+const Tabs = createBottomTabNavigator();
 
-function FertilizerStack() {
+function TabsNav() {
   return (
-    <Stack.Navigator>
-      <Stack.Screen
-        name="FertilizerList"
-        component={FertilizerListScreen}
-        options={{ title: "Fertilizer List" }}
-      />
-      <Stack.Screen
-        name="FertilizerDetail"
-        component={FertilizerDetailScreen}
-        options={({ route }) => ({ title: route.params?.name ?? "Fertilizer" })}
-      />
-    </Stack.Navigator>
+    <Tabs.Navigator
+      screenOptions={({ route }) => ({
+        headerShown: true,
+        tabBarIcon: ({ color, size }) => {
+          const map = {
+            Mix: "beaker-outline",
+            Fertilizers: "leaf-outline",
+            Saved: "bookmarks-outline",
+          };
+          return <Ionicons name={map[route.name] || "ellipse-outline"} size={size} color={color} />;
+        },
+      })}
+    >
+      <Tabs.Screen name="Mix" component={MixDirectScreen} />
+      <Tabs.Screen name="Fertilizers" component={FertilizerListScreen} />
+      <Tabs.Screen name="Saved" component={SavedRecipesScreen} />
+    </Tabs.Navigator>
   );
 }
 
 export default function App() {
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      {/* AuthGate shows the email sign-in first; after login it renders your app */}
+    <NavigationContainer>
       <AuthGate>
-        <NavigationContainer>
-          <Tab.Navigator
-            screenOptions={({ route }) => ({
-              headerShown: false,
-              tabBarIcon: ({ focused, color, size }) => {
-                let icon = "leaf-outline";
-                if (route.name === "FertTab") icon = focused ? "leaf" : "leaf-outline";
-                if (route.name === "Mix") icon = focused ? "flask" : "flask-outline";
-                return <Ionicons name={icon} size={size} color={color} />;
-              },
-            })}
-          >
-            <Tab.Screen
-              name="FertTab"
-              component={FertilizerStack}
-              options={{ title: "Fertilizer List" }}
-            />
-            <Tab.Screen
-              name="Mix"
-              component={MixDirectScreen}
-              options={{ title: "Mix" }}
-            />
-          </Tab.Navigator>
-        </NavigationContainer>
+        <Stack.Navigator>
+          <Stack.Screen name="HomeTabs" component={TabsNav} options={{ headerShown: false }} />
+          <Stack.Screen name="FertilizerDetail" component={FertilizerDetailScreen} options={{ title: "Fertilizer" }} />
+        </Stack.Navigator>
       </AuthGate>
-    </GestureHandlerRootView>
+    </NavigationContainer>
   );
 }
