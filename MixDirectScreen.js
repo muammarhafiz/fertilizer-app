@@ -1,418 +1,502 @@
-import React, { useEffect, useMemo, useState } from "react";
+// MixDirectScreen.js — DIRECT solution mixer connected to Supabase
+// - Pulls fertilizers from DB (shared or owned)
+// - Dose modes: "Total g in tank" (default) or "g/L"
+// - Correct ppm math (Mg shown as ELEMENTAL; auto-convert MgO→Mg when name mentions "MgO")
+// - Cost = total grams actually added × (price_per_bag / (bag_size_kg * 1000))
+// - Simple searchable picker + printable summary
+
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
-  View, Text, TextInput, Pressable, StyleSheet, Modal, FlatList, ScrollView, Platform, Alert,
+  ActivityIndicator,
+  Alert,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  Platform,
 } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
-import { STORAGE_KEY } from "./FertilizerListScreen";
+import { supabase } from "./supabaseClient";
 
-// ── helpers ───────────────────────────────────────────────────────────────────
-const num = (v) => (v !== "" && isFinite(v) ? Number(v) : 0);
+const MgO_TO_Mg = 0.603; // 24.305 / 40.304
 
-const MACROS = ["N", "P2O5", "K2O", "Ca", "Mg", "S"];
-const MICROS = ["Fe", "Mn", "Zn", "Cu", "B", "Mo"];
-
-// Mg (elemental) from MgO
-const MG_FROM_MGO = 0.603; // 24.305 / 40.304
-
-// Normalize percent for MACROS only (catch 0.14 → 14, 1.4 → 14)
-const normalizePct = (key, raw) => {
-  let v = num(raw);
-  if (v <= 0) return 0;
-  if (MACROS.includes(key)) {
-    if (v > 0 && v < 1) v = v * 100;      // 0.14 → 14
-    else if (v >= 1 && v < 3) v = v * 10; // 1.4 → 14
-  }
-  return v;
-};
-
-const ppmFrom = (key, percent, gPerL) =>
-  num(gPerL) * (normalizePct(key, percent) / 100) * 1000; // mg/L (ppm)
-
-const escapeHtml = (s = "") =>
-  String(s).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
-
-// sanity threshold for direct-solution ppm (used for the banner)
-const SUSPICIOUS_N_PPM = 1500;
-
-// convert all rows from g/L → total grams (uses current volume)
-function perLToTotal(rows, vol) {
-  return rows.map(r => ({
-    ...r,
-    gTotal: String((Number(r.gPerL) || 0) * (Number(vol) || 0)),
-  }));
-}
-
-// ── screen ────────────────────────────────────────────────────────────────────
 export default function MixDirectScreen() {
-  const [allFerts, setAllFerts] = useState([]);
+  // Inputs
   const [volumeL, setVolumeL] = useState("100");
   const [doseMode, setDoseMode] = useState("total"); // "total" | "perL"
-  const [rows, setRows] = useState([]); // {id, fertId, name, gPerL, gTotal}
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [activeRow, setActiveRow] = useState(null);
-  const [search, setSearch] = useState("");
-  const [warnHidden, setWarnHidden] = useState(false);
+  const [ingredients, setIngredients] = useState([]); // [{key, fertId, name, gTotal, gPerL }]
 
-  // load fertilizers
-  useEffect(() => {
-    (async () => {
-      const raw = await AsyncStorage.getItem(STORAGE_KEY);
-      const list = raw ? JSON.parse(raw) : [];
-      setAllFerts(list);
-      setRows((r) =>
-        r.length ? r : [{ id: String(Date.now()), fertId: null, name: "", gPerL: "", gTotal: "" }]
-      );
-    })();
+  // Fertilizers from DB
+  const [loading, setLoading] = useState(true);
+  const [ferts, setFerts] = useState([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerFilter, setPickerFilter] = useState("");
+  const [pickerIndex, setPickerIndex] = useState(null); // which ingredient row is choosing
+
+  // Load fertilizers (shared or own)
+  const loadFerts = useCallback(async () => {
+    try {
+      setLoading(true);
+      // Read rows visible via RLS (our policy allows shared=true or owner=me)
+      const { data, error } = await supabase
+        .from("fertilizers")
+        .select("id,name,bag_size_kg,price_per_bag,npk,micro,shared,owner")
+        .order("name", { ascending: true });
+      if (error) throw error;
+      setFerts(data ?? []);
+    } catch (e) {
+      console.warn("loadFerts error", e);
+      Alert.alert("Load error", e.message ?? String(e));
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const vol = useMemo(() => num(volumeL), [volumeL]);
+  useEffect(() => {
+    loadFerts();
+  }, [loadFerts]);
 
-  const fertByRow = (row) => allFerts.find((f) => f.id === row.fertId || f.name === row.name);
+  const addRow = () => {
+    setIngredients((prev) => [
+      ...prev,
+      {
+        key: String(Date.now() + Math.random()),
+        fertId: null,
+        name: "",
+        gTotal: "",
+        gPerL: "",
+      },
+    ]);
+  };
 
-  // derived helpers per row
-  const effectiveGPerL = (row) =>
-    doseMode === "perL" ? num(row.gPerL) : vol > 0 ? num(row.gTotal) / vol : 0;
+  const removeRow = (key) => {
+    setIngredients((prev) => prev.filter((r) => r.key !== key));
+  };
 
-  const totalGramsUsed = (row) =>
-    doseMode === "perL" ? num(row.gPerL) * vol : num(row.gTotal);
+  const openPicker = (rowIdx) => {
+    setPickerIndex(rowIdx);
+    setPickerFilter("");
+    setPickerOpen(true);
+  };
 
-  // totals (Mg shown as elemental)
-  const totals = useMemo(() => {
-    const sum = {
-      macros: Object.fromEntries(MACROS.map((k) => [k, 0])),
-      micros: Object.fromEntries(MICROS.map((k) => [k, 0])),
-      cost: 0,
-      costPerL: 0,
-    };
-
-    rows.forEach((row) => {
-      const fert = fertByRow(row);
-      const gpl = effectiveGPerL(row);
-      if (!fert || !gpl) return;
-
-      MACROS.forEach((k) => {
-        let ppm = ppmFrom(k, fert.npk?.[k] ?? "", gpl);
-        if (k === "Mg") ppm = ppm * MG_FROM_MGO; // convert MgO → Mg
-        sum.macros[k] += ppm;
-      });
-
-      MICROS.forEach((k) => {
-        const ppm = ppmFrom(k, fert.micro?.[k] ?? "", gpl);
-        sum.micros[k] += ppm;
-      });
-
-      // cost from total grams actually added
-      const grams = totalGramsUsed(row);
-      const bagKg = num(fert.bagSizeKg);
-      const price = num(fert.pricePerBag);
-      if (grams && bagKg && price) {
-        const costPerGram = price / (bagKg * 1000);
-        sum.cost += grams * costPerGram;
-      }
-    });
-
-    sum.costPerL = vol ? sum.cost / vol : 0;
-    return sum;
-  }, [rows, allFerts, vol, doseMode]);
-
-  const chooseFertForRow = (rowId, fert) => {
-    setRows((prev) =>
-      prev.map((r) => (r.id === rowId ? { ...r, fertId: fert.id, name: fert.name } : r))
+  const selectFert = (rowIdx, fert) => {
+    setIngredients((prev) =>
+      prev.map((r, i) =>
+        i === rowIdx ? { ...r, fertId: fert.id, name: fert.name } : r
+      )
     );
     setPickerOpen(false);
-    setSearch("");
   };
 
-  const addRow = () =>
-    setRows((prev) => [
-      { id: String(Date.now()), fertId: null, name: "", gPerL: "", gTotal: "" },
-      ...prev,
-    ]);
+  // Helpers
+  const num = (s) => {
+    const n = Number(s);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const vol = Math.max(0, num(volumeL));
 
-  const removeRow = (id) => setRows((prev) => prev.filter((r) => r.id !== id));
+  const getFert = (id) => ferts.find((f) => f.id === id);
 
-  const updateRow = (id, patch) =>
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  // Compute totals
+  const results = useMemo(() => {
+    let N_ppm = 0,
+      P2O5_ppm = 0,
+      K2O_ppm = 0,
+      Ca_ppm = 0,
+      Mg_ppm = 0, // ELEMENTAL Mg
+      S_ppm = 0;
 
-  const filteredForPicker = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return allFerts;
-    return allFerts.filter((f) => f.name.toLowerCase().includes(q));
-  }, [search, allFerts]);
+    let costRM = 0;
 
-  // PRINT: clean summary (shows dose mode + Mg note)
-  const onPrint = () => {
-    if (Platform.OS !== "web") {
-      Alert.alert("Print", "Please use the web version to print for now.");
-      return;
+    for (const row of ingredients) {
+      const fert = getFert(row.fertId);
+      if (!fert) continue;
+
+      const npk = fert.npk || {};
+      const name = fert.name || "";
+
+      // grams per liter from user entry + mode
+      const gPerL =
+        doseMode === "total"
+          ? vol > 0
+            ? num(row.gTotal) / vol
+            : 0
+          : num(row.gPerL);
+
+      // Percent helpers (null/undefined => 0)
+      const pct = (v) => (v == null || v === "" ? 0 : Number(v));
+
+      // Mg handling: store as ELEMENTAL Mg if possible.
+      // If the product name contains "MgO" and a Mg number is present,
+      // we assume that number is MgO% and convert to Mg elemental.
+      let Mg_percent = pct(npk.Mg);
+      if (Mg_percent > 0 && /MgO/i.test(name)) {
+        Mg_percent = Mg_percent * MgO_TO_Mg;
+      }
+
+      // ppm contribution from this ingredient
+      N_ppm += gPerL * pct(npk.N) * 10; // g/L * % * 1000; (% = value/100, so 1000/100 = 10)
+      P2O5_ppm += gPerL * pct(npk.P2O5) * 10;
+      K2O_ppm += gPerL * pct(npk.K2O) * 10;
+      Ca_ppm += gPerL * pct(npk.Ca) * 10;
+      Mg_ppm += gPerL * Mg_percent * 10;
+      S_ppm += gPerL * pct(npk.S) * 10;
+
+      // Cost
+      const price = Number(fert.price_per_bag) || 0;
+      const bagKg = Number(fert.bag_size_kg) || 0;
+      if (price > 0 && bagKg > 0) {
+        const totalG =
+          doseMode === "total" ? num(row.gTotal) : num(row.gPerL) * vol;
+        costRM += totalG * (price / (bagKg * 1000));
+      }
     }
 
-    const rowsHtml = rows
-      .map((r) => {
-        const fert = fertByRow(r);
-        const nm = fert?.name || r.name || "";
-        const dose =
-          doseMode === "perL" ? (r.gPerL || 0) + " g/L" : (r.gTotal || 0) + " g (total)";
-        return `<tr><td>${escapeHtml(nm)}</td><td style="text-align:right">${dose}</td></tr>`;
-      })
-      .join("");
+    return {
+      ppm: { N: N_ppm, P2O5: P2O5_ppm, K2O: K2O_ppm, Ca: Ca_ppm, Mg: Mg_ppm, S: S_ppm },
+      costRM,
+    };
+  }, [ingredients, ferts, doseMode, vol]);
 
-    const macroHeads = MACROS.map((k) => `<th>${k}</th>`).join("");
-    const microHeads = MICROS.map((k) => `<th>${k}</th>`).join("");
-    const macroVals = MACROS.map((k) => `<td>${Number(totals.macros[k]).toFixed(1)}</td>`).join("");
-    const microVals = MICROS.map((k) => `<td>${Number(totals.micros[k]).toFixed(1)}</td>`).join("");
+  // Simple validations/warnings
+  const warnings = useMemo(() => {
+    const w = [];
+    if (doseMode === "total" && vol === 0) w.push("Volume is 0 — enter tank volume in liters.");
+    if (results.ppm.N > 1500)
+      w.push(
+        "N > 1500 ppm — looks like a stock solution. Did you mean 'Total g in tank' rather than g/L?"
+      );
+    return w;
+  }, [results, doseMode, vol]);
 
-    const html = `<!doctype html>
-<html><head><meta charset="utf-8"><title>Mix — Direct Solution</title>
-<style>
-  *{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
-  body{margin:14mm}
-  h1{font-size:18px;margin:0 0 8px}
-  h2{font-size:14px;margin:14px 0 6px}
-  table{width:100%;border-collapse:collapse}
-  th,td{border:1px solid #ddd;padding:8px;font-size:12px}
-  .meta{margin:4px 0 12px;font-size:12px}
-  .note{margin-top:6px;font-size:12px;color:#666}
-</style></head>
+  // Print view
+  const onPrint = () => {
+    const fmt = (x) =>
+      Number.isFinite(x) ? Math.round(x) : 0;
+    const html = `
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Mix — Print</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;padding:24px;}
+    h1{margin:0 0 12px;}
+    table{border-collapse:collapse;width:100%;margin-top:12px}
+    th,td{border:1px solid #ddd;padding:8px;text-align:left}
+    th{background:#f7f7f7}
+    .muted{color:#666;font-size:12px}
+    .tot{font-weight:700}
+  </style>
+</head>
 <body>
-  <h1>Mix — Direct Solution</h1>
-  <div class="meta"><b>Volume:</b> ${vol} L &nbsp;|&nbsp; <b>Dose mode:</b> ${
-      doseMode === "perL" ? "g/L" : "Total grams in tank"
-    }</div>
+  <h1>Direct Mix</h1>
+  <div>Volume: <b>${vol}</b> L</div>
+  <div>Dose mode: <b>${doseMode === "total" ? "Total g in tank" : "g/L"}</b></div>
 
-  <h2>Ingredients</h2>
   <table>
-    <thead><tr><th style="width:70%">Fertilizer</th><th style="width:30%;text-align:right">Dose</th></tr></thead>
-    <tbody>${rowsHtml || `<tr><td colspan="2">—</td></tr>`}</tbody>
+    <thead>
+      <tr><th>#</th><th>Fertilizer</th><th>${doseMode === "total" ? "Grams (total)" : "g/L"}</th><th>Cost (RM)</th></tr>
+    </thead>
+    <tbody>
+      ${ingredients
+        .map((r, i) => {
+          const fert = getFert(r.fertId);
+          if (!fert) return "";
+          const price = Number(fert.price_per_bag) || 0;
+          const bagKg = Number(fert.bag_size_kg) || 0;
+          const totalG =
+            doseMode === "total" ? num(r.gTotal) : num(r.gPerL) * vol;
+          const cost =
+            price > 0 && bagKg > 0 ? totalG * (price / (bagKg * 1000)) : 0;
+          return `<tr>
+            <td>${i + 1}</td>
+            <td>${fert.name}</td>
+            <td>${doseMode === "total" ? (r.gTotal || 0) : (r.gPerL || 0)}</td>
+            <td>${cost.toFixed(2)}</td>
+          </tr>`;
+        })
+        .join("")}
+    </tbody>
   </table>
 
-  <h2>Totals (ppm)</h2>
   <table>
-    <thead><tr>${macroHeads}${microHeads}</tr></thead>
-    <tbody><tr>${macroVals}${microVals}</tr></tbody>
+    <thead><tr><th>Target</th><th>ppm</th></tr></thead>
+    <tbody>
+      <tr><td>N</td><td>${fmt(results.ppm.N)}</td></tr>
+      <tr><td>P₂O₅</td><td>${fmt(results.ppm.P2O5)}</td></tr>
+      <tr><td>K₂O</td><td>${fmt(results.ppm.K2O)}</td></tr>
+      <tr><td>Ca</td><td>${fmt(results.ppm.Ca)}</td></tr>
+      <tr><td>Mg (elemental)</td><td>${fmt(results.ppm.Mg)}</td></tr>
+      <tr><td>S</td><td>${fmt(results.ppm.S)}</td></tr>
+      <tr class="tot"><td>Total cost (RM)</td><td>${results.costRM.toFixed(2)}</td></tr>
+    </tbody>
   </table>
 
-  <h2>Cost</h2>
-  <div>Total: <b>RM ${Number(totals.cost).toFixed(2)}</b></div>
-  <div>Per liter: <b>RM ${Number(totals.costPerL).toFixed(4)}</b></div>
-  <div class="note">Mg is shown as <b>elemental</b> (converted from MgO × 0.603). Items without price/bag size are excluded from cost.</div>
-</body></html>`;
-
+  <p class="muted">Note: Mg shown as elemental. If a fertilizer name contains "MgO", its Mg% was converted using 0.603.</p>
+  <script>window.print();</script>
+</body>
+</html>`;
     const w = window.open("", "_blank");
-    if (!w) return;
-    w.document.open(); w.document.write(html); w.document.close(); w.focus(); w.print(); w.close();
+    w.document.write(html);
+    w.document.close();
   };
 
-  const renderRow = ({ item: row }) => {
-    const fert = fertByRow(row);
-    const doseLabel = doseMode === "perL" ? "Dose (g/L)" : "Dose (g total)";
-    const doseValue = doseMode === "perL" ? row.gPerL : row.gTotal;
-    const onDoseChange = (t) =>
-      updateRow(row.id, doseMode === "perL" ? { gPerL: t } : { gTotal: t });
-
-    return (
-      <View style={styles.rowCard}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.small}>Fertilizer</Text>
-          <Pressable
-            onPress={() => { setActiveRow(row); setPickerOpen(true); }}
-            style={[styles.input, { minHeight: 44, justifyContent: "center" }]}
-          >
-            <Text numberOfLines={1}>{fert?.name || row.name || "Pick fertilizer…"}</Text>
-          </Pressable>
-        </View>
-
-        <View style={{ width: 140 }}>
-          <Text style={styles.small}>{doseLabel}</Text>
-          <TextInput
-            keyboardType="decimal-pad"
-            value={String(doseValue ?? "")}
-            onChangeText={onDoseChange}
-            style={styles.input}
-            placeholder="0"
-          />
-        </View>
-
-        <Pressable onPress={() => removeRow(row.id)} style={styles.iconBtn} accessibilityLabel="Remove row">
-          <Ionicons name="trash-outline" size={18} color="#c00" />
-        </Pressable>
-      </View>
-    );
-  };
-
-  const highStrength = doseMode === "perL" && totals.macros.N > SUSPICIOUS_N_PPM && !warnHidden;
-
+  // UI
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Mix — Direct Solution</Text>
+    <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 24 }}>
+      <Text style={styles.title}>Direct Mix</Text>
 
-      {/* Top actions */}
-      <View style={styles.row}>
-        <View style={{ width: 140 }}>
-          <Text style={styles.small}>Volume (L)</Text>
-          <TextInput
-            keyboardType="decimal-pad"
-            value={volumeL}
-            onChangeText={setVolumeL}
-            style={styles.input}
-            placeholder="e.g. 100"
-          />
-        </View>
+      {/* Top inputs */}
+      <View style={styles.card}>
+        <Text style={styles.label}>Volume (L)</Text>
+        <TextInput
+          value={volumeL}
+          onChangeText={setVolumeL}
+          keyboardType="decimal-pad"
+          placeholder="e.g. 100"
+          style={styles.input}
+        />
 
-        {/* Dose mode toggle */}
+        <Text style={[styles.label, { marginTop: 10 }]}>Dose mode</Text>
         <View style={styles.segment}>
           <Pressable
             onPress={() => setDoseMode("total")}
             style={[styles.segBtn, doseMode === "total" && styles.segActive]}
           >
-            <Text style={[styles.segText, doseMode === "total" && styles.segTextActive]}>Total g in tank</Text>
+            <Text style={[styles.segText, doseMode === "total" && styles.segTextActive]}>
+              Total g in tank
+            </Text>
           </Pressable>
           <Pressable
             onPress={() => setDoseMode("perL")}
             style={[styles.segBtn, doseMode === "perL" && styles.segActive]}
           >
-            <Text style={[styles.segText, doseMode === "perL" && styles.segTextActive]}>g/L</Text>
+            <Text style={[styles.segText, doseMode === "perL" && styles.segTextActive]}>
+              g/L
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+
+      {/* Ingredients */}
+      <View style={styles.card}>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+          <Text style={styles.section}>Ingredients</Text>
+          <Pressable onPress={addRow} style={styles.addBtn}>
+            <Ionicons name="add" size={18} color="#fff" />
+            <Text style={styles.addText}>Add</Text>
           </Pressable>
         </View>
 
-        <Pressable onPress={addRow} style={[styles.pillBtn, { backgroundColor: "#222" }]}>
-          <Ionicons name="add" size={18} color="#fff" />
-          <Text style={{ color: "#fff", fontWeight: "600", marginLeft: 6 }}>Add ingredient</Text>
-        </Pressable>
+        {ingredients.length === 0 && (
+          <Text style={{ color: "#666", marginTop: 8 }}>
+            Tap <Text style={{ fontWeight: "700" }}>Add</Text> to insert a fertilizer row.
+          </Text>
+        )}
 
-        <Pressable onPress={onPrint} style={[styles.pillBtn, { backgroundColor: "#eee" }]}>
-          <Ionicons name="print-outline" size={18} />
-          <Text style={{ marginLeft: 6 }}>Print</Text>
-        </Pressable>
+        {ingredients.map((r, idx) => {
+          const fert = getFert(r.fertId);
+          return (
+            <View key={r.key} style={styles.rowCard}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.smallLabel}>Fertilizer</Text>
+                <Pressable
+                  onPress={() => openPicker(idx)}
+                  style={[styles.input, { minHeight: 44, justifyContent: "center" }]}
+                >
+                  <Text numberOfLines={2}>
+                    {fert ? fert.name : "Select a fertilizer…"}
+                  </Text>
+                </Pressable>
+              </View>
+              <View style={{ width: 10 }} />
+              <View style={{ width: 160 }}>
+                <Text style={styles.smallLabel}>
+                  {doseMode === "total" ? "Grams (total)" : "g/L"}
+                </Text>
+                <TextInput
+                  value={doseMode === "total" ? r.gTotal : r.gPerL}
+                  onChangeText={(t) =>
+                    setIngredients((prev) =>
+                      prev.map((row, i) =>
+                        i === idx
+                          ? doseMode === "total"
+                            ? { ...row, gTotal: t }
+                            : { ...row, gPerL: t }
+                          : row
+                      )
+                    )
+                  }
+                  keyboardType="decimal-pad"
+                  placeholder="0"
+                  style={styles.input}
+                />
+              </View>
+
+              <Pressable onPress={() => removeRow(r.key)} style={styles.trashBtn}>
+                <Ionicons name="trash-outline" size={18} color="#c00" />
+              </Pressable>
+            </View>
+          );
+        })}
       </View>
 
-      {/* Unit guard */}
-      {highStrength && (
-        <View style={styles.warn}>
-          <Ionicons name="alert-circle-outline" size={16} color="#8a6d3b" />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.warnText}>
-              N is {totals.macros.N.toFixed(0)} ppm in g/L mode — unusually high for a direct solution.
-              Did you mean to enter <Text style={{fontWeight:"700"}}>total grams for the tank</Text>?
-            </Text>
-            <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
-              <Pressable
-                onPress={() => {
-                  setRows(prev => perLToTotal(prev, vol)); // convert g/L → total
-                  setDoseMode("total");
-                  setWarnHidden(true);
-                }}
-                style={[styles.pillBtn, { backgroundColor: "#222" }]}
-              >
-                <Text style={{ color: "#fff", fontWeight: "600" }}>Convert to total g</Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setWarnHidden(true)}
-                style={[styles.pillBtn, { backgroundColor: "#eee" }]}
-              >
-                <Text>Dismiss</Text>
+      {/* Totals */}
+      <View style={styles.card}>
+        <Text style={styles.section}>Totals at dripper (ppm)</Text>
+        {loading ? (
+          <ActivityIndicator />
+        ) : (
+          <View style={styles.grid}>
+            <Box label="N" value={results.ppm.N} />
+            <Box label="P₂O₅" value={results.ppm.P2O5} />
+            <Box label="K₂O" value={results.ppm.K2O} />
+            <Box label="Ca" value={results.ppm.Ca} />
+            <Box label="Mg (elemental)" value={results.ppm.Mg} />
+            <Box label="S" value={results.ppm.S} />
+            <Box label="Total cost (RM)" value={results.costRM} fixed2 />
+          </View>
+        )}
+        {warnings.map((w, i) => (
+          <Text key={i} style={{ color: "#b00020", marginTop: 6 }}>
+            {w}
+          </Text>
+        ))}
+      </View>
+
+      <Pressable onPress={onPrint} style={styles.printBtn}>
+        <Ionicons name="print-outline" size={18} color="#fff" />
+        <Text style={styles.printText}>Print</Text>
+      </Pressable>
+
+      {/* Picker modal */}
+      <Modal visible={pickerOpen} animationType="slide" transparent>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Select fertilizer</Text>
+            <TextInput
+              value={pickerFilter}
+              onChangeText={setPickerFilter}
+              placeholder="Search…"
+              style={styles.input}
+              autoFocus
+            />
+            <ScrollView style={{ maxHeight: 360, marginTop: 8 }}>
+              {ferts
+                .filter((f) =>
+                  (f.name || "")
+                    .toLowerCase()
+                    .includes(pickerFilter.trim().toLowerCase())
+                )
+                .map((f) => (
+                  <Pressable
+                    key={f.id}
+                    onPress={() => selectFert(pickerIndex, f)}
+                    style={styles.pickRow}
+                  >
+                    <Ionicons name="leaf-outline" size={18} style={{ marginRight: 8 }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontWeight: "600" }}>{f.name}</Text>
+                      <Text style={{ color: "#666", fontSize: 12 }}>
+                        {f.bag_size_kg ? `${f.bag_size_kg} kg` : "—"} ·{" "}
+                        {f.price_per_bag ? `RM ${f.price_per_bag}` : "no price"}
+                      </Text>
+                    </View>
+                  </Pressable>
+                ))}
+              {ferts.length === 0 && (
+                <Text style={{ color: "#666" }}>
+                  No fertilizers. Add some in the Fertilizer List tab.
+                </Text>
+              )}
+            </ScrollView>
+
+            <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 10, marginTop: 10 }}>
+              <Pressable onPress={() => setPickerOpen(false)} style={[styles.pillBtn, { backgroundColor: "#eee" }]}>
+                <Text>Close</Text>
               </Pressable>
             </View>
           </View>
         </View>
-      )}
-
-      {/* Ingredients */}
-      <FlatList
-        style={{ flex: 1, marginTop: 10 }}
-        data={rows}
-        keyExtractor={(r) => r.id}
-        renderItem={renderRow}
-        contentContainerStyle={{ paddingBottom: 16 }}
-        ListEmptyComponent={<Text>No ingredients yet.</Text>}
-        keyboardShouldPersistTaps="handled"
-      />
-
-      {/* Totals */}
-      <ScrollView style={styles.summary} contentContainerStyle={{ paddingVertical: 10 }}>
-        <Text style={styles.section}>Totals (ppm)</Text>
-        <View style={styles.grid}>
-          {MACROS.map((k) => <Box key={k} label={k} value={totals.macros[k]} />)}
-        </View>
-        <View style={[styles.grid, { marginTop: 8 }]}>
-          {MICROS.map((k) => <Box key={k} label={k} value={totals.micros[k]} />)}
-        </View>
-
-        <View style={{ height: 10 }} />
-        <Text style={styles.section}>Cost</Text>
-        <Text>Estimated total: <Text style={styles.bold}>RM {totals.cost.toFixed(3)}</Text></Text>
-        <Text>Per liter: <Text style={styles.bold}>RM {totals.costPerL.toFixed(4)}</Text></Text>
-        <Text style={styles.note}>
-          Mg is shown as <Text style={{fontWeight:"700"}}>elemental</Text> (converted from MgO × 0.603).
-          Cost uses total grams (or g/L × volume) based on the selected dose mode.
-        </Text>
-      </ScrollView>
-
-      {/* Picker */}
-      <Modal visible={pickerOpen} animationType="slide" transparent>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Choose fertilizer</Text>
-            <TextInput value={search} onChangeText={setSearch} placeholder="Search…" style={styles.input} autoFocus />
-            <FlatList
-              data={filteredForPicker}
-              keyExtractor={(f) => f.id}
-              renderItem={({ item }) => (
-                <Pressable onPress={() => chooseFertForRow(activeRow?.id, item)} style={styles.pickRow}>
-                  <Text numberOfLines={2} style={{ flex: 1 }}>{item.name}</Text>
-                  <Ionicons name="chevron-forward" size={16} />
-                </Pressable>
-              )}
-              style={{ maxHeight: 300, marginTop: 8 }}
-              keyboardShouldPersistTaps="handled"
-            />
-            <View style={{ height: 10 }} />
-            <Pressable onPress={() => setPickerOpen(false)} style={[styles.pillBtn, { backgroundColor: "#eee", alignSelf: "flex-end" }]}>
-              <Text>Close</Text>
-            </Pressable>
-          </View>
-        </View>
       </Modal>
-    </View>
+    </ScrollView>
   );
 }
 
-function Box({ label, value }) {
-  const display = isFinite(value) ? Number(value).toFixed(1) : "-";
+// Small box UI
+function Box({ label, value, fixed2 = false }) {
+  const v = Number(value);
+  const text =
+    Number.isFinite(v) ? (fixed2 ? v.toFixed(2) : Math.round(v).toString()) : "0";
   return (
     <View style={styles.box}>
       <Text style={styles.boxLabel}>{label}</Text>
-      <Text style={styles.boxValue}>{display}</Text>
+      <Text style={styles.boxValue}>{text}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16, backgroundColor: "#fff" },
-  title: { fontSize: 22, fontWeight: "700", textAlign: "center" },
-  row: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 12, flexWrap: "wrap" },
-  input: { borderWidth: 1, borderColor: "#ddd", borderRadius: 10, paddingHorizontal: 12, height: 44 },
-  pillBtn: { flexDirection: "row", alignItems: "center", paddingHorizontal: 14, height: 44, borderRadius: 10 },
-  segment: { flexDirection: "row", borderWidth: 1, borderColor: "#ddd", borderRadius: 10, overflow: "hidden" },
-  segBtn: { paddingHorizontal: 12, height: 44, alignItems: "center", justifyContent: "center" },
+  container: { flex: 1, backgroundColor: "#fff", padding: 16 },
+  title: { fontSize: 22, fontWeight: "700", textAlign: "center", marginBottom: 8 },
+
+  card: {
+    borderWidth: 1, borderColor: "#eee", borderRadius: 12,
+    padding: 12, marginBottom: 12, backgroundColor: "#fff",
+  },
+
+  label: { fontWeight: "600", marginBottom: 6 },
+  input: {
+    borderWidth: 1, borderColor: "#ddd", borderRadius: 10,
+    height: 44, paddingHorizontal: 12, backgroundColor: "#fff",
+  },
+
+  segment: {
+    flexDirection: "row", borderWidth: 1, borderColor: "#ddd",
+    borderRadius: 10, overflow: "hidden", marginTop: 6,
+  },
+  segBtn: { paddingHorizontal: 12, height: 36, alignItems: "center", justifyContent: "center" },
   segActive: { backgroundColor: "#222" },
   segText: { color: "#222", fontWeight: "600" },
   segTextActive: { color: "#fff" },
-  rowCard: { flexDirection: "row", alignItems: "flex-end", gap: 10, borderWidth: 1, borderColor: "#eee", borderRadius: 12, padding: 10, marginBottom: 8, backgroundColor: "#fff" },
-  iconBtn: { height: 44, width: 44, borderRadius: 10, borderWidth: 1, borderColor: "#eee", alignItems: "center", justifyContent: "center", backgroundColor: "#fff" },
-  summary: { borderTopWidth: 1, borderColor: "#eee", marginTop: 8, paddingTop: 4, maxHeight: 220 },
-  section: { fontSize: 16, fontWeight: "700", marginBottom: 8 },
-  grid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  box: { width: "31%", minWidth: 100, borderWidth: 1, borderColor: "#eee", borderRadius: 10, padding: 10, alignItems: "center" },
-  boxLabel: { fontWeight: "600", marginBottom: 4 },
-  boxValue: { fontSize: 16 },
-  bold: { fontWeight: "700" },
-  note: { fontSize: 12, color: "#666", marginTop: 4 },
+
+  section: { fontSize: 16, fontWeight: "700" },
+  addBtn: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    backgroundColor: "#222", paddingHorizontal: 12, height: 40, borderRadius: 10,
+  },
+  addText: { color: "#fff", fontWeight: "700" },
+
+  rowCard: {
+    marginTop: 10, borderWidth: 1, borderColor: "#eee", borderRadius: 10, padding: 10,
+    flexDirection: "row", alignItems: "flex-end",
+  },
+  trashBtn: {
+    marginLeft: 10, height: 40, width: 40, borderRadius: 10,
+    alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#eee",
+  },
+
+  grid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },
+  box: { width: "31%", minWidth: 150, borderWidth: 1, borderColor: "#eee", borderRadius: 10, padding: 10 },
+  boxLabel: { color: "#666", fontSize: 12 },
+  boxValue: { fontSize: 18, fontWeight: "700" },
+
+  printBtn: {
+    marginTop: 8, backgroundColor: "#222", height: 46,
+    borderRadius: 10, alignItems: "center", justifyContent: "center",
+    flexDirection: "row", gap: 8,
+  },
+  printText: { color: "#fff", fontWeight: "700" },
+
   modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.3)", justifyContent: "center", padding: 20 },
   modalCard: { backgroundColor: "#fff", borderRadius: 14, padding: 16 },
-  modalTitle: { fontSize: 18, fontWeight: "600", marginBottom: 8 },
-  pickRow: { flexDirection: "row", alignItems: "center", borderWidth: 1, borderColor: "#eee", borderRadius: 10, padding: 10, marginBottom: 6, backgroundColor: "#fff" },
-  warn: { flexDirection: "row", alignItems: "center", gap: 8, padding: 10, backgroundColor: "#fff7e6", borderWidth: 1, borderColor: "#ffe1a5", borderRadius: 10, marginTop: 10 },
-  warnText: { color: "#8a6d3b", flex: 1 },
+  modalTitle: { fontSize: 18, fontWeight: "700", marginBottom: 8 },
+  pickRow: {
+    flexDirection: "row", alignItems: "center",
+    paddingVertical: 8, paddingHorizontal: 6, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: "#eee",
+  },
 });
