@@ -21,7 +21,7 @@ import {
 import { Swipeable } from "react-native-gesture-handler";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "./supabaseClient";
-import seeds from "./fertilizers.full.json"; // <-- your JSON
+import seeds from "./assets/fertilizers.full"; // <-- your JSON
 
 export default function FertilizerListScreen({ navigation }) {
   const [items, setItems] = useState([]);
