@@ -1,4 +1,4 @@
-// FertilizerListScreen.js — Supabase + header Sign-out + Import JSON (drop-in)
+// FertilizerListScreen.js — Supabase + Import + Sign-out + web-friendly delete confirm
 
 import React, {
   useCallback,
@@ -17,11 +17,12 @@ import {
   View,
   FlatList,
   ActivityIndicator,
+  Platform,
 } from "react-native";
 import { Swipeable } from "react-native-gesture-handler";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "./supabaseClient";
-import seeds from "./assets/fertilizers.full"; // <-- your JSON
+import seeds from "./assets/fertilizers.full"; // JS module with export default [...]
 
 export default function FertilizerListScreen({ navigation }) {
   const [items, setItems] = useState([]);
@@ -110,14 +111,14 @@ export default function FertilizerListScreen({ navigation }) {
         return;
       }
 
-      // Get existing names to avoid duplicates
       const { data: existing, error: selErr } = await supabase
         .from("fertilizers")
         .select("name");
       if (selErr) throw selErr;
-      const existingNames = new Set((existing ?? []).map((x) => x.name?.trim()?.toLowerCase()));
+      const existingNames = new Set(
+        (existing ?? []).map((x) => x.name?.trim()?.toLowerCase())
+      );
 
-      // Build rows to insert (skip names that already exist)
       const rows = [];
       for (const f of seeds) {
         const nm = (f.name ?? "").trim();
@@ -165,6 +166,25 @@ export default function FertilizerListScreen({ navigation }) {
       Alert.alert("Import error", e.message ?? String(e));
     }
   };
+
+  // Mobile/web confirm helper
+  const confirmDelete = (name) =>
+    new Promise((resolve) => {
+      if (Platform.OS === "web") {
+        // Browser confirm returns true/false
+        resolve(window.confirm(`Delete "${name}"?`));
+      } else {
+        Alert.alert(
+          "Delete fertilizer",
+          `Delete "${name}"?`,
+          [
+            { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+            { text: "Delete", style: "destructive", onPress: () => resolve(true) },
+          ],
+          { cancelable: true }
+        );
+      }
+    });
 
   // CRUD
   const addItem = async () => {
@@ -229,24 +249,18 @@ export default function FertilizerListScreen({ navigation }) {
     }
   };
 
-  const removeItem = async (id) => {
-    Alert.alert("Delete fertilizer", "Are you sure you want to delete this?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: async () => {
-          try {
-            const { error } = await supabase.from("fertilizers").delete().eq("id", id);
-            if (error) throw error;
-            setItems((prev) => prev.filter((it) => it.id !== id));
-          } catch (e) {
-            console.warn("delete error", e);
-            Alert.alert("Delete error", e.message ?? String(e));
-          }
-        },
-      },
-    ]);
+  const removeItem = async (id, name) => {
+    const ok = await confirmDelete(name);
+    if (!ok) return;
+
+    try {
+      const { error } = await supabase.from("fertilizers").delete().eq("id", id);
+      if (error) throw error;
+      setItems((prev) => prev.filter((it) => it.id !== id));
+    } catch (e) {
+      console.warn("delete error", e);
+      Alert.alert("Delete error", e.message ?? String(e));
+    }
   };
 
   // Filter
@@ -264,7 +278,10 @@ export default function FertilizerListScreen({ navigation }) {
           <Ionicons name="create-outline" size={20} />
           <Text style={styles.actionText}>Edit</Text>
         </Pressable>
-        <Pressable style={styles.actionBtn} onPress={() => removeItem(item.id)}>
+        <Pressable
+          style={styles.actionBtn}
+          onPress={() => removeItem(item.id, item.name)}
+        >
           <Ionicons name="trash-outline" size={20} color="#c00" />
           <Text style={[styles.actionText, { color: "#c00" }]}>Delete</Text>
         </Pressable>
